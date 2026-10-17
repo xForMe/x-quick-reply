@@ -37,6 +37,7 @@ test('generation precedes real decision and uses gateway custom header', async (
   const app = runtime([{ body: { schemaVersion, candidates } }, { body: decision }]);
   const result = await app.send();
   assert.equal(result.ok, true);
+  assert.equal(result.autoLikeAfterReply, false);
   assert.equal(result.decision.selectedId, 'c1');
   assert.equal(result.decision.confidence, 0.6);
   assert.equal(app.calls.length, 2);

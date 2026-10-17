@@ -61,6 +61,53 @@ test('public reply dialog reads only its target and fills selected candidate wit
   } finally {a.close();}
 });
 
+test('auto-like waits for a confirmed user send and verifies the like state', async () => {
+  const a=app({response:()=>({ok:true,autoLikeAfterReply:true,candidates:[{id:'c1',text:'先聊这个。'},{id:'c2',text:'可以具体说说。'}],decision:{selectedId:'c1',reviewRequired:false,confidence:0.8}}),html:`<div role="dialog">${post('123','目标帖子')}<div data-testid="tweetTextarea_0" role="textbox" contenteditable="true"></div><button data-testid="tweetButton">Reply</button></div>`});
+  try {
+    const like=a.w.document.createElement('button'); like.dataset.testid='like'; like.setAttribute('aria-label','Like');
+    like.onclick=()=>{like.dataset.testid='unlike';like.setAttribute('aria-label','Unlike');};
+    a.w.document.querySelector('[data-testid="tweet"]').append(like);
+    await a.generate();
+    assert.equal(like.dataset.testid,'like');
+    const editor=a.w.document.querySelector('[role="textbox"]');
+    a.w.document.querySelector('[data-testid="tweetButton"]').onclick=()=>{editor.textContent='';};
+    a.w.document.querySelector('[data-testid="tweetButton"]').click();
+    assert.equal(like.dataset.testid,'like');
+    a.tick();
+    assert.equal(like.dataset.testid,'unlike',a.status());
+    assert.match(a.status(),/已自动点赞/);
+  } finally {a.close();}
+});
+
+test('auto-like stays disabled unless the setting is explicitly enabled', async () => {
+  const a=app({html:`<div role="dialog">${post('123','目标帖子')}<div data-testid="tweetTextarea_0" role="textbox" contenteditable="true"></div><button data-testid="tweetButton">Reply</button></div>`});
+  try {
+    const like=a.w.document.createElement('button'); like.dataset.testid='like'; like.setAttribute('aria-label','Like');
+    a.w.document.querySelector('[data-testid="tweet"]').append(like);
+    await a.generate();
+    a.w.document.querySelector('[role="textbox"]').textContent='';
+    a.w.document.querySelector('[data-testid="tweetButton"]').click(); a.tick();
+    assert.equal(like.dataset.testid,'like');
+  } finally {a.close();}
+});
+
+test('auto-like also covers a manually typed public reply when the panel is open', async () => {
+  const a=app({html:`<div role="dialog">${post('123','目标帖子')}${editor}<button data-testid="tweetButton">Reply</button></div>`});
+  try {
+    a.w.chrome.storage={local:{async get(){return {autoLikeAfterReply:true};}}};
+    const like=a.w.document.createElement('button'); like.dataset.testid='like'; like.setAttribute('aria-label','Like');
+    like.onclick=()=>{like.dataset.testid='unlike';like.setAttribute('aria-label','Unlike');};
+    a.w.document.querySelector('[data-testid="tweet"]').append(like);
+    const textbox=a.w.document.querySelector('[role="textbox"]'); textbox.textContent='手写回复';
+    a.w.document.querySelector('[data-testid="tweetButton"]').onclick=()=>{textbox.textContent='';};
+    a.w.document.querySelector('[data-testid="tweetButton"]').click();
+    await new Promise(resolve=>setTimeout(resolve,0));
+    assert.equal(textbox.textContent,'');
+    assert.equal(like.dataset.testid,'unlike',a.status());
+    assert.match(a.status(),/已自动点赞/);
+  } finally {a.close();}
+});
+
 test('reply language follows source content regardless of the X interface language',async()=>{
   for(const [interfaceLanguage,text] of [['en','这个周末想去爬山，大家有什么建议？'],['zh-CN','Any tips for my first hiking trip?']]){
     const a=app({html:`<div role="dialog">${post('123',text)}${editor}</div>`});

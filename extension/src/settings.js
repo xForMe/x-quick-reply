@@ -13,5 +13,6 @@ export const DEFAULTS = Object.freeze({
   candidateCount: 3,
   replyPrompt: DEFAULT_REPLY_PROMPT,
   replyExamples: "",
+  autoLikeAfterReply: false,
   timeoutMs: 100000
 });

@@ -7,6 +7,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   try {
     const settings = { ...DEFAULTS, ...(await chrome.storage.local.get(DEFAULTS)) };
     for (const key of ["gatewayUrl", "tone", "candidateCount", "replyPrompt", "replyExamples"]) document.getElementById(key).value = settings[key];
+    document.getElementById("autoLikeAfterReply").checked = settings.autoLikeAfterReply === true;
   } catch (error) {
     save.disabled = true;
     report(`读取设置失败：${error.message}`, true);
@@ -20,6 +21,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     const gatewayUrl = document.getElementById("gatewayUrl").value.trim();
     const replyPrompt = document.getElementById("replyPrompt").value.trim();
     const replyExamples = document.getElementById("replyExamples").value.trim();
+    const autoLikeAfterReply = document.getElementById("autoLikeAfterReply").checked;
     const candidateCount = Number(document.getElementById("candidateCount").value);
     const tone = document.getElementById("tone").value;
     if (!/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?\/?$/.test(gatewayUrl)) return report("仅支持 http://localhost 或 http://127.0.0.1", true);
@@ -29,7 +31,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (replyExamples.length > 3000) return report("我的回复示例不能超过 3000 字符", true);
     save.disabled = true;
     try {
-      await chrome.storage.local.set({ gatewayUrl, tone, candidateCount, replyPrompt, replyExamples });
+      await chrome.storage.local.set({ gatewayUrl, tone, candidateCount, replyPrompt, replyExamples, autoLikeAfterReply });
       report("已保存，下次生成生效。");
     } catch (error) { report(`保存设置失败：${error.message}`, true); }
     finally { save.disabled = false; }

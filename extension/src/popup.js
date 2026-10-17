@@ -11,7 +11,7 @@ document.getElementById("open").addEventListener("click", async () => {
     const results = await chrome.scripting.executeScript({ target: { tabId: tab.id, frameIds: [0] }, files: ["src/content.js"], world: "ISOLATED" });
     const boot = results.find(result => result.frameId === 0)?.result;
     if (!boot?.ok) throw new Error(boot?.error || "页面脚本未返回初始化结果");
-    if (boot.version !== "0.3.0") throw new Error(`页面脚本版本不符：${boot.version}`);
+    if (boot.version !== "0.4.0") throw new Error(`页面脚本版本不符：${boot.version}`);
     stage = "加载面板样式";
     await chrome.scripting.insertCSS({ target: { tabId: tab.id, frameIds: [0] }, files: ["src/content.css"] });
     stage = "连接页面脚本";

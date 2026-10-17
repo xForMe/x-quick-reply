@@ -5,7 +5,7 @@ const fs=require('node:fs');
 const path=require('node:path');
 const {JSDOM}=require('jsdom');
 const source=fs.readFileSync(path.join(__dirname,'../extension/src/popup.js'),'utf8');
-async function clickOpen({scriptError, messageError, response={ok:true}, bootstrapResult={ok:true,version:'0.3.0'}}={}) {
+async function clickOpen({scriptError, messageError, response={ok:true}, bootstrapResult={ok:true,version:'0.4.0'}}={}) {
   const dom=new JSDOM('<button id="open"></button><button id="settings"></button><p id="status"></p>',{runScripts:'outside-only'});
   const w=dom.window, calls=[];
   let injected=false, closed=false;

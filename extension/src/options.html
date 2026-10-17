@@ -25,6 +25,8 @@
   <label for="replyExamples">我的回复示例（可选）</label>
   <textarea id="replyExamples" maxlength="3000" aria-describedby="examplesHelp" placeholder="每行一条你自己写过的自然回复，建议 3–10 条"></textarea>
   <small id="examplesHelp">只用于学习你的口吻，不会替代当前帖子事实或强制回复语言。示例会发送给生成模型和百炼；不要填写密钥、Cookie、私信正文或敏感资料。</small>
+  <label><input id="autoLikeAfterReply" type="checkbox"> 发送公开回复后自动点赞目标帖子</label>
+  <small>仅在你实际点击 X 的发送按钮、且发送结果得到页面确认后执行；私信不适用。默认关闭，点赞失败不会重试。</small>
   <button id="resetPrompt" type="button">恢复默认提示词</button><small>恢复只修改上方文本，点击“保存”后生效。</small>
   <button id="save" type="button">保存</button><span id="status" role="status"></span>
   <script type="module" src="options.js"></script>
