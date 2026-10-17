@@ -1,0 +1,5 @@
+body { width: 270px; padding: 14px; font: 14px/1.5 system-ui, sans-serif; color: #17202a; }
+button { width: 100%; margin: 5px 0; padding: 9px; cursor: pointer; border: 1px solid #cfd9de; border-radius: 9px; background: white; }
+#open { background: #1d9bf0; color: white; border: 0; }
+#status { color: #536471; overflow-wrap: anywhere; max-height: 220px; overflow: auto; }
+#status.error { color: #b42318; }

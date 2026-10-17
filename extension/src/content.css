@@ -1,0 +1,16 @@
+#quick-reply-panel { position: fixed; z-index: 2147483647; right: 18px; bottom: 18px; width: 320px; max-height: 70vh; overflow: auto; padding: 14px; color: #17202a; background: #fff; border: 1px solid #cfd9de; border-radius: 14px; box-shadow: 0 8px 28px #0002; font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+#quick-reply-panel button { font: inherit; cursor: pointer; }
+#quick-reply-panel[hidden] { display: none; }
+.qr-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.qr-header button { border: 0; background: transparent; font-size: 20px; }
+.qr-status { margin: 8px 0 10px; color: #536471; }
+.qr-status.error { color: #b42318; }
+.qr-primary, .qr-fill { width: 100%; padding: 8px 10px; border: 0; border-radius: 999px; color: #fff; background: #1d9bf0; }
+.qr-fill { margin-top: 10px; background: #0f7a4b; }
+.qr-fill:disabled { cursor: not-allowed; opacity: .45; }
+.qr-candidates { display: grid; gap: 8px; margin-top: 10px; }
+.qr-candidate { display: grid; gap: 5px; width: 100%; padding: 10px; text-align: left; border: 1px solid #cfd9de; border-radius: 10px; background: #fff; }
+.qr-candidate.selected { border-color: #1d9bf0; box-shadow: 0 0 0 2px #1d9bf033; }
+.qr-candidate em { color: #0f7a4b; font-size: 12px; font-style: normal; }
+.qr-reason { color: #536471; font-size: 12px; }
+.qr-diagnostics { margin-top: 10px; padding: 5px; border: 0; color: #536471; background: transparent; text-decoration: underline; }

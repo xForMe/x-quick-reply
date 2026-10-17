@@ -1,0 +1,50 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.dpapi
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Node.js
+node_modules/
+dist/
+build/
+coverage/
+.npm/
+*.crx
+
+# Local runtime data and logs
+*.log
+logs/
+tmp/
+temp/
+.cache/
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Local agent task state (keep project skills and documentation tracked)
+/.pi/tasks/
+
+# Editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*~

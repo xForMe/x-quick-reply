@@ -1,0 +1,15 @@
+{
+  "private": true,
+  "scripts": {
+    "test": "node --test tests/*.test.cjs"
+  },
+  "devDependencies": {
+    "draft-js": "0.11.7",
+    "jsdom": "^29.1.1",
+    "react": "17.0.2",
+    "react-dom": "17.0.2"
+  },
+  "overrides": {
+    "immutable": "3.8.4"
+  }
+}
