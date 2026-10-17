@@ -38,7 +38,8 @@ async function generateReplies(context, source) {
     language: "auto",
     tone: settings.tone,
     candidateCount: clampInt(settings.candidateCount, 2, 5),
-    replyPrompt: settings.replyPrompt.trim()
+    replyPrompt: settings.replyPrompt.trim(),
+    replyExamples: typeof settings.replyExamples === "string" ? settings.replyExamples.trim() : ""
   };
 
   if (!settings.gatewayUrl.trim()) throw new Error("请在扩展设置中配置本地网关地址");

@@ -22,6 +22,9 @@
   <label for="replyPrompt">整体回复提示词</label>
   <textarea id="replyPrompt" maxlength="3000" aria-describedby="promptHelp"></textarea>
   <small id="promptHelp">生成和百炼筛选共用。可写语气、偏好的接话方式和不想出现的表达，最多 3000 字符。默认轻松幽默；严肃话题优先得体。不要填写密钥或隐私资料。</small>
+  <label for="replyExamples">我的回复示例（可选）</label>
+  <textarea id="replyExamples" maxlength="3000" aria-describedby="examplesHelp" placeholder="每行一条你自己写过的自然回复，建议 3–10 条"></textarea>
+  <small id="examplesHelp">只用于学习你的口吻，不会替代当前帖子事实或强制回复语言。示例会发送给生成模型和百炼；不要填写密钥、Cookie、私信正文或敏感资料。</small>
   <button id="resetPrompt" type="button">恢复默认提示词</button><small>恢复只修改上方文本，点击“保存”后生效。</small>
   <button id="save" type="button">保存</button><span id="status" role="status"></span>
   <script type="module" src="options.js"></script>

@@ -49,10 +49,14 @@ test('generation precedes real decision and uses gateway custom header', async (
 
 test('one stored overall prompt reaches generation and decision unchanged',async()=>{
   const replyPrompt='轻松接梗，不装熟，不要每条都反问。';
-  const app=runtime([{body:{schemaVersion,candidates}},{body:decision}],{settings:{replyPrompt}});
+  const replyExamples='这句我会直接回：先忙你的。';
+  const app=runtime([{body:{schemaVersion,candidates}},{body:decision}],{settings:{replyPrompt,replyExamples}});
   const result=await app.send();
   assert.equal(result.ok,true,result.error);
-  for(const call of app.calls) assert.equal(JSON.parse(call.options.body).replyPrompt,replyPrompt);
+  for(const call of app.calls){
+    assert.equal(JSON.parse(call.options.body).replyPrompt,replyPrompt);
+    assert.equal(JSON.parse(call.options.body).replyExamples,replyExamples);
+  }
 });
 
 test('invalid saved prompt stops before any model request',async()=>{

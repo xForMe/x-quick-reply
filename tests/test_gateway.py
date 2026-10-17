@@ -16,7 +16,7 @@ from gateway import (GatewayError, Models, Settings, SCHEMA, make_server,
 
 def request():
     return {"schemaVersion": SCHEMA, "kind": "direct-message", "messages": [{"role": "them", "text": "明天下午方便聊吗？"}],
-            "tone": "natural", "candidateCount": 2, "language": "auto", "replyPrompt": "轻松幽默，像日常聊天，不硬抖机灵。"}
+            "tone": "natural", "candidateCount": 2, "language": "auto", "replyPrompt": "轻松幽默，像日常聊天，不硬抖机灵。", "replyExamples": ""}
 
 
 def candidates():
@@ -46,7 +46,8 @@ class ModelTests(unittest.TestCase):
                     "candidates": [{"text": c["text"]} for c in candidates()]})}}]}
             return answer()
         models = Models(settings(), transport)
-        value = {**request(), "replyPrompt": "  轻松接话，不用表情，不说加油。  "}
+        value = {**request(), "replyPrompt": "  轻松接话，不用表情，不说加油。  ",
+                 "replyExamples": "  先忙你的，晚点再说。  "}
         generated = models.generate(value)
         models.decide({**value, "candidates": generated["candidates"]})
         self.assertIn(models.policy, calls[0]["messages"][0]["content"])
@@ -54,7 +55,11 @@ class ModelTests(unittest.TestCase):
         expected = value["replyPrompt"].strip()
         self.assertEqual(json.loads(calls[0]["messages"][1]["content"])["replyPrompt"], expected)
         self.assertEqual(calls[1]["state"]["replyPrompt"], expected)
-        self.assertEqual(generated["meta"]["promptVersion"], "reply-policy.v2")
+        self.assertEqual(json.loads(calls[0]["messages"][1]["content"])["replyExamples"], "先忙你的，晚点再说。")
+        self.assertEqual(calls[1]["state"]["replyExamples"], "先忙你的，晚点再说。")
+        self.assertIn("用户过去写过的回复示例", calls[0]["messages"][0]["content"])
+        self.assertIn("用户过去写过的回复示例", calls[1]["questions"]["best_reply"]["instructions"])
+        self.assertEqual(generated["meta"]["promptVersion"], "reply-policy.v3")
 
     def test_missing_or_invalid_overall_prompt_is_not_replaced_by_a_default(self):
         for reply_prompt in [None, "", " ", 123, "字" * 3001]:
@@ -64,6 +69,14 @@ class ModelTests(unittest.TestCase):
         value.pop("replyPrompt")
         with self.assertRaisesRegex(GatewayError, "replyPrompt"):
             validate_request(value)
+
+    def test_reply_examples_are_optional_but_bounded_and_preserved(self):
+        self.assertEqual(validate_request(request())["replyExamples"], "")
+        value = validate_request({**request(), "replyExamples": "  随手回一句。  "})
+        self.assertEqual(value["replyExamples"], "随手回一句。")
+        for examples in [None, 12, "字" * 3001]:
+            with self.subTest(examples=str(examples)[:20]), self.assertRaisesRegex(GatewayError, "replyExamples"):
+                validate_request({**request(), "replyExamples": examples})
 
     def test_unreadable_shared_policy_stops_instead_of_using_old_instructions(self):
         with patch.object(Path, "read_text", side_effect=OSError("unreadable")):
