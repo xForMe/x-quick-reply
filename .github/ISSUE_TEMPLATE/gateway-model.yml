@@ -1,0 +1,52 @@
+name: 模型或网关问题
+description: 报告生成服务、百炼决策或本地网关的配置与请求问题
+title: "[网关] "
+body:
+  - type: dropdown
+    id: stage
+    attributes:
+      label: 失败阶段
+      options:
+        - 网关启动
+        - 健康检查
+        - 生成请求
+        - 百炼决策请求
+        - 浏览器连接网关
+        - 不确定
+    validations:
+      required: true
+
+  - type: input
+    id: status
+    attributes:
+      label: HTTP 状态码
+      placeholder: 例如 401、403、429；没有则填写无
+
+  - type: textarea
+    id: message
+    attributes:
+      label: 完整脱敏错误
+      description: 请保留失败阶段和状态码，删除密钥、响应中的敏感内容和完整请求正文
+    validations:
+      required: true
+
+  - type: textarea
+    id: config
+    attributes:
+      label: 配置项状态
+      description: 只说明哪些配置项已填写，不要粘贴配置值或密钥
+      placeholder: |
+        LLM_BASE_URL：已填写
+        LLM_MODEL：已填写
+        LLM_API_KEY：已填写
+        百炼配置：已填写
+
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: 提交前确认
+      options:
+        - label: 我已删除 API 密钥、Cookie、私信正文和完整模型响应
+          required: true
+        - label: 我没有通过更换模型、服务商或凭据来绕过当前错误
+          required: true
