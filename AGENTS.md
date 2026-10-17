@@ -22,3 +22,14 @@
 - 修改协议时同步更新实现、契约和验证证据；未经真实验证不得宣称请求成功或功能可用。
 - 开发检查：`npm ci` 后执行 `npm test`；后端执行 `python -X utf8 -m unittest discover -s tests -v`。
 - `tests/evaluate_prompts.py` 会真实调用已配置的模型服务；运行与记录结果时不得泄露凭据或真实私信。
+
+## GitHub Issue、PR 与发布
+
+- 快速回复的需求或缺陷先记录到 [x-quick-reply Issues](https://github.com/xForMe/x-quick-reply/issues)。Issue 至少写明场景、复现步骤或输入、期望行为、实际行为和验收标准；读取失败时优先提供脱敏的结构诊断。
+- 代码修改使用主题分支和 Pull Request；PR 描述写清问题、影响范围、实现、测试命令及结果、真实 Chrome/X 验收状态和未解决风险，并关联对应 Issue（例如 `Fixes #12` 或 `Refs #12`）。
+- PR Review 意见必须逐项处理或明确说明暂不处理的原因。修复后重新运行相关测试并在 PR 中更新结果；不得用固定文案、Mock 通过或跳过检查掩盖真实失败。
+- 如果配置了 GitHub Actions，Actions 结果只是自动化证据；通过不等于真实模型请求、Chrome 页面读取或 X 编辑器回填已经验证。未配置 Actions 时，不得声称 CI 已通过。
+- `main` 只接收已审查并通过必要检查的变更。提交信息保持单一目的，尽量关联 Issue；文档、协议和测试证据应随行为变更同步更新。
+- 创建标签、Release、合并 PR、关闭 Issue、删除分支和推送属于外部仓库写操作，必须有用户明确授权；禁止强制推送、重写远端历史或覆盖他人提交。
+- 提交和 PR 发布前检查 `.env`、凭据、Cookie、私信正文、诊断原文、缓存和大文件；GitHub Issue、PR 和 Actions 日志只允许出现脱敏信息。
+- GitHub 模板或工作流文件只有在实际创建并验证后才能写入项目说明；模板中的检查项必须对应真实命令和验收标准。
