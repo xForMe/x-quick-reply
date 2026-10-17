@@ -5,12 +5,37 @@ ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 LOG_DIR="$ROOT_DIR/logs"
 PID_FILE="$LOG_DIR/gateway.pid"
 GATEWAY_PATH="$ROOT_DIR/gateway.py"
+ENV_FILE="$ROOT_DIR/.env"
+
+read_port() {
+    if [[ -f "$ENV_FILE" ]]; then
+        awk -F= '/^[[:space:]]*QUICK_REPLY_PORT[[:space:]]*=/ {
+            value=$2
+            sub(/[[:space:]]*#.*/, "", value)
+            gsub(/[[:space:]]/, "", value)
+            gsub(/^"|"$/, "", value)
+            gsub(/^'"'"'|'"'"'$/, "", value)
+            if (value ~ /^[0-9]+$/) print value
+        }' "$ENV_FILE" | tail -n 1
+    fi
+}
+
+PORT=${QUICK_REPLY_PORT:-$(read_port)}
+PORT=${PORT:-8787}
+
+listener_pids() {
+    if command -v ss >/dev/null 2>&1; then
+        ss -ltnp 2>/dev/null | awk -v port=":$PORT" '$4 ~ (port "$|\\]" port "$")' |
+            grep -o 'pid=[0-9]*' | cut -d= -f2 | sort -u
+    fi
+}
 
 is_gateway_pid() {
     local pid=$1
     local command
     command=$(ps -p "$pid" -o args= 2>/dev/null || true)
-    [[ "$command" == *"$GATEWAY_PATH"* ]]
+    [[ "$command" == *"$GATEWAY_PATH"* ]] && return 0
+    [[ "$command" == *"gateway.py"* ]] && grep -qx "$pid" < <(listener_pids)
 }
 
 stop_pid() {
