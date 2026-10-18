@@ -13,9 +13,9 @@ function app({html = `<div role="dialog">${post('123', '一起讨论这个想法
   const w = dom.window, calls = [];
   let messageListener;
   let listenerCount = 0;
-  let poll;
-  w.setInterval = fn => {poll=fn;return 1;};
-  w.clearInterval = () => {};
+  const intervals = [];
+  w.setInterval = fn => {intervals.push(fn);return intervals.length;};
+  w.clearInterval = id => {intervals[id - 1] = null;};
   w.Element.prototype.getClientRects = function () { return this.closest('[hidden]') ? [] : [{}]; };
   w.chrome = {runtime:{onMessage:{addListener(fn){messageListener=fn;listenerCount++;},removeListener(fn){if(messageListener===fn) {messageListener=null;listenerCount--;}}}, async sendMessage(message) {
     calls.push(message);
@@ -43,7 +43,7 @@ function app({html = `<div role="dialog">${post('123', '一起讨论这个想法
     status:()=>w.document.querySelector('[data-role="status"]').textContent,
     async generate(){w.document.querySelector('[data-action="generate"]').click(); await new Promise(resolve=>setTimeout(resolve,180));},
     open(){let result; messageListener({type:'OPEN_QUICK_REPLY'}, {id:'test'}, r=>result=r);return result;},
-    boot, tick(){poll();},reinject(){return w.eval(source);},listenerCount(){return listenerCount;},
+    boot, tick(){intervals.filter(Boolean).forEach(fn=>fn());},reinject(){return w.eval(source);},listenerCount(){return listenerCount;},
     close(){Object.defineProperty(w.Element.prototype,'innerHTML',htmlDescriptor);w.close();}};
 }
 
@@ -130,6 +130,25 @@ test('auto-like relocates the target when X rewrites the status link and uses a 
     a.tick();
     const replacement=a.w.document.querySelector('[data-testid="tweet"]');
     assert.equal(replacement.querySelector('[aria-label$="Unlike"]').getAttribute('aria-label'),'44 Likes. Unlike',a.status());
+    assert.match(a.status(),/已自动点赞/);
+  } finally {a.close();}
+});
+
+test('auto-like survives the route change caused by closing the reply modal', async () => {
+  const a=app({response:()=>({ok:true,autoLikeAfterReply:true,candidates:[{id:'c1',text:'先聊这个。'}],decision:{selectedId:'c1',reviewRequired:false,confidence:0.8}})});
+  try {
+    const like=a.w.document.createElement('button'); like.dataset.testid='like'; like.setAttribute('aria-label','43 Likes. Like');
+    like.onclick=()=>{like.dataset.testid='unlike';like.setAttribute('aria-label','44 Likes. Unlike');};
+    a.w.document.querySelector('[data-testid="tweet"]').append(like);
+    await a.generate();
+    const editorNode=a.w.document.querySelector('[role="textbox"]');
+    a.w.document.querySelector('[data-testid="tweetButton"]').onclick=()=>{
+      editorNode.remove();
+      a.w.history.pushState({},'', '/home');
+    };
+    a.w.document.querySelector('[data-testid="tweetButton"]').click();
+    a.tick();
+    assert.equal(like.dataset.testid,'unlike',a.status());
     assert.match(a.status(),/已自动点赞/);
   } finally {a.close();}
 });

@@ -431,7 +431,15 @@
         const hadWork = source !== null;
         href = location.href;
         dismissed = false;
-        invalidate(hadWork ? "页面已切换，旧回复已停止。请点击下方按钮重新生成。" : READY_TEXT, hadWork);
+        // X commonly closes the reply modal and changes back to the timeline
+        // immediately after a successful send. Preserve the one-shot like
+        // confirmation across that expected transition; the target is still
+        // checked by node identity or its captured status ID before clicking.
+        if (pendingLike) {
+          pendingLike.source.url = location.href;
+        } else {
+          invalidate(hadWork ? "页面已切换，旧回复已停止。请点击下方按钮重新生成。" : READY_TEXT, hadWork);
+        }
       }
       panel.hidden = dismissed || !(isConversation() || (isReplyRoute() && [...document.querySelectorAll('[role="dialog"]')].some(visible)));
     };
