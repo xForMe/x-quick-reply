@@ -1,5 +1,5 @@
 (() => {
-  const VERSION = "0.4.2";
+  const VERSION = "0.4.3";
   const INVALID_CONTEXT_TEXT = "插件连接已失效。请刷新 X 页面，再重新打开回复弹窗并生成。";
   function isInvalidContext(error) { return /^Extension context invalidated\.?$/i.test(error?.message || ""); }
   const READY_TEXT = "点击下方按钮，生成回复并填入输入框。";
@@ -533,7 +533,7 @@
     }).reverse();
   }
 
-  function fillSelected() {
+  async function fillSelected() {
     if (pendingFill) return;
     if (!sourceIsCurrent()) return invalidate("会话或草稿已变化，请重新生成");
     const selected = state.candidates.find((candidate) => candidate.id === state.selectedId);
@@ -561,27 +561,41 @@
           selection.removeAllRanges(); selection.addRange(range);
         };
         selectCurrentEditorContents();
-        // Let controlled editors observe the selection, then restore the full
-        // range immediately before paste. Some editors collapse their caret
-        // while handling selectionchange, which would turn replacement into
-        // append if that collapsed range were used.
+        // Let controlled editors observe the full replacement selection.
         document.dispatchEvent(new Event("selectionchange", { bubbles: true }));
-        // The controlled editor may rebuild its text nodes while handling the
-        // event. Recreate the range from the current editor instead of
-        // reusing boundary points that may refer to detached nodes.
+        // Recreate the range after the controlled editor's synchronous update.
         selectCurrentEditorContents();
-        // The first event can also leave the editor's internal selection at
-        // the caret position. Notify the controlled editor again after the
-        // full range has been restored so its paste handler uses replacement
-        // selection rather than appending at the end.
         document.dispatchEvent(new Event("selectionchange", { bubbles: true }));
         if (!sourceIsCurrent()) throw new Error("选择输入区域时目标或草稿发生变化");
+        // Draft-style controlled editors keep the authoritative selection in
+        // framework state. A synthetic key event lets them delete that
+        // selection through their normal editing path before we paste the
+        // replacement. Synthetic events have no browser default action, so a
+        // missing handler is surfaced as a failure instead of silently
+        // appending to the existing draft.
+        const clear = new KeyboardEvent("keydown", {
+          bubbles: true,
+          cancelable: true,
+          key: "Backspace",
+          code: "Backspace",
+          which: 8,
+          keyCode: 8
+        });
+        editor.dispatchEvent(clear);
+        if (!clear.defaultPrevented) throw new Error("当前编辑器未接收清空事件");
+        // Controlled editors commit the deletion in their framework update
+        // after the key event returns. Wait for that render before checking
+        // the cleared DOM or dispatching the replacement paste.
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        if (editorText(editor) !== "") throw new Error("当前编辑器未清空输入框");
+        selectCurrentEditorContents();
+        document.dispatchEvent(new Event("selectionchange", { bubbles: true }));
         const clipboard = new DataTransfer();
         clipboard.setData("text/plain", selected.text);
         const paste = new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: clipboard });
         editor.dispatchEvent(paste);
-        // A synthetic paste has no native default insertion. The site's editor
-        // must handle it once; never combine it with execCommand/DOM mutation.
+        // A synthetic paste has no native default insertion. The site's
+        // editor must handle it once; never combine it with DOM mutation.
         if (!paste.defaultPrevented) throw new Error("当前编辑器未接收粘贴事件，未执行其他写入方式");
       }
     } catch (error) {

@@ -137,6 +137,13 @@ test('actual page and background scripts generate and fill after a home-to-reply
   w.Element.prototype.getClientRects=()=>[{}];
   w.chrome={runtime:{onMessage:{addListener(){},removeListener(){}},sendMessage:message=>worker.receive(message,documentSender)}};
   require('./clipboard-fixture.cjs').installClipboard(w);
+  w.document.addEventListener('keydown',event=>{
+    if(event.target.matches('[contenteditable="true"]') && event.key==='Backspace'){
+      event.preventDefault();
+      const selection=w.getSelection();
+      if(selection.rangeCount) selection.getRangeAt(0).deleteContents();
+    }
+  });
   w.document.addEventListener('paste',event=>{event.preventDefault();event.target.textContent=event.clipboardData.getData('text/plain');});
   try{
     const content=`${reactRuntime}\n${fs.readFileSync(path.join(__dirname,'../extension/src/content.js'),'utf8')}`;
