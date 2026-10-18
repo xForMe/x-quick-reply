@@ -56,7 +56,7 @@
   document.addEventListener("input", onInput, true);
   const onDocumentClick = (event) => {
     if (pendingLike || !isReplyRoute()) return;
-    const button = event.target.closest('[data-testid="tweetButton"], [data-testid="tweetButtonInline"]');
+    const button = findSendButton(event.target);
     if (!button || button.disabled || button.getAttribute("aria-disabled") === "true") return;
     let likeSource = source?.owned && source.kind === "public-reply" ? source : null;
     if (!likeSource) {
@@ -275,7 +275,7 @@
     }
     const target = findLikeTarget(operation.source);
     const like = target && findLikeButton(target);
-    if (!like) return finishLike(false, "回复已发送，但未找到目标帖的点赞按钮；未自动重试");
+    if (!like) return finishLike(false, `回复已发送，但未找到目标帖的点赞按钮（目标帖仍在页面：${target ? "是" : "否"}）；未自动重试`);
     if (isLiked(like)) return finishLike(true, "回复已发送，目标帖子此前已点赞");
     if (!operation.clicked) {
       operation.clicked = true;
@@ -289,20 +289,42 @@
     if (operationSource.target?.isConnected) return operationSource.target;
     // If the modal was removed after sending, only a unique status URL is
     // strong enough to relocate the original target; profile links are not.
-    const links = (operationSource.targetLinks || []).filter((href) => /\/status\/\d+/.test(href || ""));
-    if (!links.length) return null;
+    const statusIds = [...new Set((operationSource.targetLinks || [])
+      .map(statusIdFromHref).filter(Boolean))];
+    if (!statusIds.length) return null;
     return [...document.querySelectorAll('[data-testid="tweet"]')].find((post) =>
-      links.some((href) => [...post.querySelectorAll('a[href]')].some((anchor) => anchor.getAttribute("href") === href)));
+      statusIds.some((id) => [...post.querySelectorAll('a[href]')].some((anchor) => statusIdFromHref(anchor.getAttribute("href")) === id)));
   }
 
   function findLikeButton(target) {
-    return [...target.querySelectorAll('[data-testid="like"], [data-testid="unlike"], [aria-label="Like"], [aria-label="Unlike"], [aria-label="喜欢"], [aria-label="已喜欢"], [aria-label="取消喜欢"]')]
+    const selector = '[data-testid="like"], [data-testid="unlike"], [data-testid*="like"], [aria-label], [role="button"]';
+    return [...target.querySelectorAll(selector)]
+      .filter((button) => isLikeControl(button))
       .find((button) => visible(button) && !button.disabled && button.getAttribute("aria-disabled") !== "true") || null;
   }
 
   function isLiked(button) {
     return button?.getAttribute("data-testid") === "unlike" || button?.getAttribute("aria-pressed") === "true"
-      || /^(Unlike|取消喜欢|已喜欢)$/i.test(button?.getAttribute("aria-label") || "");
+      || /^(Unlike|取消喜欢|已喜欢)(?:\s*\(?[\d,.]+\)?)?$/i.test(button?.getAttribute("aria-label") || "");
+  }
+
+  function isLikeControl(button) {
+    const testId = button?.getAttribute("data-testid") || "";
+    const label = (button?.getAttribute("aria-label") || "").trim();
+    return /^(?:un)?like(?:button)?$/i.test(testId)
+      || /^(?:Like|Unlike|喜欢|已喜欢|取消喜欢)(?:\s*\(?[\d,.]+\)?)?$/i.test(label);
+  }
+
+  function findSendButton(node) {
+    if (!(node instanceof Element)) return null;
+    const button = node.closest('[data-testid^="tweetButton"]');
+    if (!button) return null;
+    return button;
+  }
+
+  function statusIdFromHref(href) {
+    const match = String(href || "").match(/\/status\/(\d+)(?:[/?#]|$)/);
+    return match?.[1] || null;
   }
 
   function finishLike(success, message) {

@@ -108,6 +108,32 @@ test('auto-like also covers a manually typed public reply when the panel is open
   } finally {a.close();}
 });
 
+test('auto-like relocates the target when X rewrites the status link and uses a counted aria label', async () => {
+  const a=app({response:()=>({ok:true,autoLikeAfterReply:true,candidates:[{id:'c1',text:'先聊这个。'}],decision:{selectedId:'c1',reviewRequired:false,confidence:0.8}}),html:`<div role="dialog">${post('123','目标帖子')}${editor}<button data-testid="tweetButtonInline">Reply</button></div>`});
+  try {
+    const original=a.w.document.querySelector('[data-testid="tweet"]');
+    const editorNode=a.w.document.querySelector('[role="textbox"]');
+    const like=a.w.document.createElement('button'); like.setAttribute('aria-label','Like (12)');
+    like.onclick=()=>{like.setAttribute('aria-label','Unlike (13)');};
+    original.append(like);
+    await a.generate();
+    a.w.document.querySelector('[data-testid="tweetButtonInline"]').onclick=()=>{
+      editorNode.remove();
+      original.remove();
+      const replacement=a.w.document.createElement('article'); replacement.dataset.testid='tweet';
+      replacement.innerHTML='<a href="https://x.com/someone/status/123?ref=timeline"></a>';
+      const replacementLike=a.w.document.createElement('button'); replacementLike.setAttribute('aria-label','Like (12)');
+      replacementLike.onclick=()=>replacementLike.setAttribute('aria-label','Unlike (13)');
+      replacement.append(replacementLike); a.w.document.body.append(replacement);
+    };
+    a.w.document.querySelector('[data-testid="tweetButtonInline"]').click();
+    a.tick();
+    const replacement=a.w.document.querySelector('[data-testid="tweet"]');
+    assert.equal(replacement.querySelector('[aria-label^="Unlike"]').getAttribute('aria-label'),'Unlike (13)',a.status());
+    assert.match(a.status(),/已自动点赞/);
+  } finally {a.close();}
+});
+
 test('reply language follows source content regardless of the X interface language',async()=>{
   for(const [interfaceLanguage,text] of [['en','这个周末想去爬山，大家有什么建议？'],['zh-CN','Any tips for my first hiking trip?']]){
     const a=app({html:`<div role="dialog">${post('123',text)}${editor}</div>`});
