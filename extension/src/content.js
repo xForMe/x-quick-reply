@@ -197,6 +197,11 @@
     let settingResolved = false;
     let operation = null;
 
+    function log(stage, details = {}) {
+      // 日志只包含流程状态和 DOM 语义，不输出正文、草稿、URL 或 status ID。
+      console.info("[x-quick-reply][auto-like]", stage, details);
+    }
+
     return {
       configure,
       isEnabled: () => enabled,
@@ -216,8 +221,14 @@
     function handleSendClick(node) {
       const button = findSendButton(node);
       if (operation || !isReplyRoute() || !isEnabledSendButton(button)) return;
+      log("send-click-captured", { settingResolved, enabled });
       const likeSource = resolveLikeSource(button);
       if (!likeSource) return;
+      log("source-resolved", {
+        sourceOwned: likeSource.owned === true,
+        targetAttached: !!likeSource.target?.isConnected,
+        targetLinkCount: (likeSource.targetLinks || []).length
+      });
       if (settingResolved) return startIfEnabled(likeSource);
 
       // StorageArea methods must retain their receiver; calling get detached from
@@ -232,6 +243,7 @@
           return setStatus("自动点赞开关设置无效，请重新保存扩展设置", true);
         }
         enabled = settings.autoLikeAfterReply;
+        log("setting-read", { enabled });
         startIfEnabled(likeSource);
       }).catch((error) => setStatus(`读取自动点赞设置失败：${error.message}`, true));
     }
@@ -252,8 +264,13 @@
     }
 
     function startIfEnabled(likeSource) {
-      if (!enabled || likeSource.url !== location.href) return;
-      operation = { source: likeSource, clicked: false, deadline: Date.now() + 5000, timer: null };
+      if (!enabled || likeSource.url !== location.href) {
+        log("operation-skipped", { enabled, sameRoute: likeSource.url === location.href });
+        return;
+      }
+      operation = { source: likeSource, clicked: false, sendConfirmed: false, targetLogged: false,
+        likeLogged: false, deadline: Date.now() + 5000, timer: null };
+      log("operation-started", { timeoutMs: 5000 });
       setStatus("已点击发送，正在确认回复并点赞原帖…");
       startChecking();
     }
@@ -276,8 +293,9 @@
       const targetUrl = canonicalStatusUrl(marker.url);
       if (!targetUrl || statusIdFromHref(location.href) !== statusIdFromHref(targetUrl)) return;
       operation = { source: { url: location.href, kind: "public-reply", target: null, editor: null,
-        targetLinks: [targetUrl] }, clicked: false, deadline: Date.now() + 10000, timer: null,
-        navigationStarted: true };
+        targetLinks: [targetUrl] }, clicked: false, sendConfirmed: true, targetLogged: false,
+        likeLogged: false, deadline: Date.now() + 10000, timer: null, navigationStarted: true };
+      log("operation-restored", { timeoutMs: 10000 });
       setStatus("已打开原帖，正在确认点赞按钮…");
       startChecking();
     }
@@ -301,24 +319,52 @@
         if (Date.now() >= operation.deadline) return finish(false, "发送未确认，未自动点赞；未重试");
         return;
       }
+      if (!operation.sendConfirmed) {
+        operation.sendConfirmed = true;
+        log("reply-send-confirmed", { editorGone, editorCleared });
+      }
       const target = findLikeTarget(operation.source);
       const targetUrl = findTargetStatusUrl(operation.source);
       if (!targetUrl) return finish(false, "回复已发送，但没有可靠的原帖链接；未自动跳转或点赞");
-      if (!target && !operation.navigationStarted) return navigateToTarget(targetUrl);
+      if (!target && !operation.navigationStarted) {
+        log("target-not-in-current-page", { hasTargetLink: true });
+        return navigateToTarget(targetUrl);
+      }
       if (!target) {
         if (Date.now() >= operation.deadline) return finish(false, "已打开原帖，但未找到目标帖子；未自动重试");
         return;
+      }
+      if (!operation.targetLogged) {
+        operation.targetLogged = true;
+        log("target-found", { navigationStarted: !!operation.navigationStarted });
       }
       const like = findLikeButton(target);
       if (!like) {
         if (Date.now() >= operation.deadline) return finish(false, "已打开原帖，但未找到点赞按钮；未自动重试");
         return;
       }
+      if (!operation.likeLogged) {
+        operation.likeLogged = true;
+        log("like-button-found", {
+          dataTestId: like.getAttribute("data-testid"),
+          ariaState: likeLabelState(like.getAttribute("aria-label")),
+          alreadyLiked: isLiked(like)
+        });
+      }
       if (isLiked(like)) return finish(true, "回复已发送，目标帖子此前已点赞");
       if (!operation.clicked) {
         // 只允许点击一次；点击后必须从 DOM 状态确认已点赞。
+        log("like-click-before", {
+          dataTestId: like.getAttribute("data-testid"),
+          ariaState: likeLabelState(like.getAttribute("aria-label"))
+        });
         operation.clicked = true;
         like.click();
+        log("like-click-dispatched", {
+          dataTestId: like.getAttribute("data-testid"),
+          ariaState: likeLabelState(like.getAttribute("aria-label")),
+          liked: isLiked(like)
+        });
       }
       if (isLiked(like)) return finish(true, "回复已发送，已自动点赞目标帖子");
       if (Date.now() >= operation.deadline) return finish(false, "已尝试点赞，但页面未确认成功；未自动重试");
@@ -399,6 +445,7 @@
     }
 
     function finish(success, message) {
+      log("operation-finished", { success, message });
       clearOperation(true);
       setStatus(message, !success);
     }
