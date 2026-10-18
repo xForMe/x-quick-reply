@@ -5,17 +5,21 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { JSDOM } = require('jsdom');
 const { installClipboard } = require('./clipboard-fixture.cjs');
-const source = fs.readFileSync(path.join(__dirname, '../extension/src/content.js'), 'utf8');
+const reactRuntime = [
+  fs.readFileSync(path.join(__dirname, '../extension/src/vendor/react.production.min.js'), 'utf8'),
+  fs.readFileSync(path.join(__dirname, '../extension/src/vendor/react-dom.production.min.js'), 'utf8')
+].join('\n');
+const source = `${reactRuntime}\n${fs.readFileSync(path.join(__dirname, '../extension/src/content.js'), 'utf8')}`;
 const post = (id, text) => `<article data-testid="tweet"><a href="/someone/status/${id}"><time>now</time></a><div data-testid="tweetText">${text}</div></article>`;
 const editor = '<div data-testid="tweetTextarea_0" role="textbox" contenteditable="true"></div>';
-function app({html = `<div role="dialog">${post('123', '一起讨论这个想法？')}${editor}<button data-testid="tweetButton">Reply</button></div>`, url = 'https://x.com/compose/post', response, trustedTypes = false, pasteHandler} = {}) {
+function app({html = `<div role="dialog">${post('123', '一起讨论这个想法？')}${editor}<button data-testid="tweetButton">Reply</button></div>`, url = 'https://x.com/compose/post', response, trustedTypes = false, pasteHandler, pendingLikeMarker, pendingLikeRaw} = {}) {
   const dom = new JSDOM(`<body>${html}</body>`, {url, runScripts:'outside-only', pretendToBeVisual:true});
   const w = dom.window, calls = [];
   let messageListener;
   let listenerCount = 0;
-  let poll;
-  w.setInterval = fn => {poll=fn;return 1;};
-  w.clearInterval = () => {};
+  const intervals = [];
+  w.setInterval = fn => {intervals.push(fn);return intervals.length;};
+  w.clearInterval = id => {intervals[id - 1] = null;};
   w.Element.prototype.getClientRects = function () { return this.closest('[hidden]') ? [] : [{}]; };
   w.chrome = {runtime:{onMessage:{addListener(fn){messageListener=fn;listenerCount++;},removeListener(fn){if(messageListener===fn) {messageListener=null;listenerCount--;}}}, async sendMessage(message) {
     calls.push(message);
@@ -38,12 +42,14 @@ function app({html = `<div role="dialog">${post('123', '一起讨论这个想法
     Object.defineProperty(w.Element.prototype, 'innerHTML', { set() { throw new TypeError("This document requires 'TrustedHTML' assignment."); } });
     w.Element.prototype.insertAdjacentHTML = () => { throw new TypeError("This document requires 'TrustedHTML' assignment."); };
   }
+  if (pendingLikeRaw !== undefined) w.sessionStorage.setItem('__xQuickReplyPendingLike.v1', pendingLikeRaw);
+  else if (pendingLikeMarker) w.sessionStorage.setItem('__xQuickReplyPendingLike.v1', JSON.stringify(pendingLikeMarker));
   const boot = w.eval(source);
   return {w, calls, panel:()=>w.document.getElementById('quick-reply-panel'),
     status:()=>w.document.querySelector('[data-role="status"]').textContent,
     async generate(){w.document.querySelector('[data-action="generate"]').click(); await new Promise(resolve=>setTimeout(resolve,180));},
     open(){let result; messageListener({type:'OPEN_QUICK_REPLY'}, {id:'test'}, r=>result=r);return result;},
-    boot, tick(){poll();},reinject(){return w.eval(source);},listenerCount(){return listenerCount;},
+    boot, tick(){intervals.filter(Boolean).forEach(fn=>fn());},reinject(){return w.eval(source);},listenerCount(){return listenerCount;},
     close(){Object.defineProperty(w.Element.prototype,'innerHTML',htmlDescriptor);w.close();}};
 }
 
@@ -58,6 +64,148 @@ test('public reply dialog reads only its target and fills selected candidate wit
     assert.equal(a.w.document.querySelector('[role="textbox"]').textContent,'你最想先讨论哪一部分？');
     assert.equal(sent,0);
     assert.match(a.status(),/已回填/);
+  } finally {a.close();}
+});
+
+test('auto-like waits for a confirmed user send and verifies the like state', async () => {
+  const a=app({response:()=>({ok:true,autoLikeAfterReply:true,candidates:[{id:'c1',text:'先聊这个。'},{id:'c2',text:'可以具体说说。'}],decision:{selectedId:'c1',reviewRequired:false,confidence:0.8}}),html:`<div role="dialog">${post('123','目标帖子')}<div data-testid="tweetTextarea_0" role="textbox" contenteditable="true"></div><button data-testid="tweetButton">Reply</button></div>`});
+  try {
+    const like=a.w.document.createElement('button'); like.dataset.testid='like'; like.setAttribute('aria-label','Like');
+    like.onclick=()=>{like.dataset.testid='unlike';like.setAttribute('aria-label','44 Likes. Liked');};
+    a.w.document.querySelector('[data-testid="tweet"]').append(like);
+    await a.generate();
+    assert.equal(like.dataset.testid,'like');
+    const editor=a.w.document.querySelector('[role="textbox"]');
+    a.w.document.querySelector('[data-testid="tweetButton"]').onclick=()=>{editor.textContent='';};
+    a.w.document.querySelector('[data-testid="tweetButton"]').click();
+    assert.equal(like.dataset.testid,'like');
+    a.tick();
+    assert.equal(like.dataset.testid,'unlike');
+    assert.equal(like.getAttribute('aria-label'),'44 Likes. Liked',a.status());
+    assert.match(a.status(),/已自动点赞/);
+  } finally {a.close();}
+});
+
+test('auto-like stays disabled unless the setting is explicitly enabled', async () => {
+  const a=app({html:`<div role="dialog">${post('123','目标帖子')}<div data-testid="tweetTextarea_0" role="textbox" contenteditable="true"></div><button data-testid="tweetButton">Reply</button></div>`});
+  try {
+    const like=a.w.document.createElement('button'); like.dataset.testid='like'; like.setAttribute('aria-label','Like');
+    a.w.document.querySelector('[data-testid="tweet"]').append(like);
+    await a.generate();
+    a.w.document.querySelector('[role="textbox"]').textContent='';
+    a.w.document.querySelector('[data-testid="tweetButton"]').click(); a.tick();
+    assert.equal(like.dataset.testid,'like');
+  } finally {a.close();}
+});
+
+test('auto-like also covers a manually typed public reply when the panel is open', async () => {
+  const a=app({html:`<div role="dialog">${post('123','目标帖子')}${editor}<button data-testid="tweetButton">Reply</button></div>`});
+  try {
+    const storage={async get(){assert.equal(this,storage);return {autoLikeAfterReply:true};}};
+    a.w.chrome.storage={local:storage};
+    const like=a.w.document.createElement('button'); like.dataset.testid='like'; like.setAttribute('aria-label','Like');
+    like.onclick=()=>{like.dataset.testid='unlike';like.setAttribute('aria-label','Liked');};
+    a.w.document.querySelector('[data-testid="tweet"]').append(like);
+    const textbox=a.w.document.querySelector('[role="textbox"]'); textbox.textContent='手写回复';
+    a.w.document.querySelector('[data-testid="tweetButton"]').onclick=()=>{textbox.textContent='';};
+    a.w.document.querySelector('[data-testid="tweetButton"]').click();
+    await new Promise(resolve=>setTimeout(resolve,0));
+    assert.equal(textbox.textContent,'');
+    assert.equal(like.dataset.testid,'unlike',a.status());
+    assert.match(a.status(),/已自动点赞/);
+  } finally {a.close();}
+});
+
+test('auto-like relocates the target and ignores the count in the aria label', async () => {
+  const a=app({response:()=>({ok:true,autoLikeAfterReply:true,candidates:[{id:'c1',text:'先聊这个。'}],decision:{selectedId:'c1',reviewRequired:false,confidence:0.8}}),html:`<div role="dialog">${post('123','目标帖子')}${editor}<button data-testid="tweetButtonInline">Reply</button></div>`});
+  try {
+    const original=a.w.document.querySelector('[data-testid="tweet"]');
+    const editorNode=a.w.document.querySelector('[role="textbox"]');
+    const like=a.w.document.createElement('button'); like.setAttribute('aria-label','42,001 Likes. Like');
+    like.onclick=()=>{like.setAttribute('aria-label','42,002 Likes. Liked');};
+    original.append(like);
+    await a.generate();
+    a.w.document.querySelector('[data-testid="tweetButtonInline"]').onclick=()=>{
+      editorNode.remove();
+      original.remove();
+      const replacement=a.w.document.createElement('article'); replacement.dataset.testid='tweet';
+      replacement.innerHTML='<a href="https://x.com/someone/status/123?ref=timeline"></a>';
+      const replacementLike=a.w.document.createElement('button'); replacementLike.setAttribute('aria-label','42,001 Likes. Like');
+      replacementLike.onclick=()=>replacementLike.setAttribute('aria-label','42,002 Likes. Liked');
+      replacement.append(replacementLike); a.w.document.body.append(replacement);
+    };
+    a.w.document.querySelector('[data-testid="tweetButtonInline"]').click();
+    a.tick();
+    const replacement=a.w.document.querySelector('[data-testid="tweet"]');
+    assert.equal(replacement.querySelector('[aria-label$="Liked"]').getAttribute('aria-label'),'42,002 Likes. Liked',a.status());
+    assert.match(a.status(),/已自动点赞/);
+  } finally {a.close();}
+});
+
+test('auto-like reads a status link rendered beside the tweet wrapper', async () => {
+  const a=app({response:()=>({ok:true,autoLikeAfterReply:true,candidates:[{id:'c1',text:'先聊这个。'}],decision:{selectedId:'c1',reviewRequired:false,confidence:0.8}}),html:`<div role="dialog"><article data-testid="tweet"><a href="/z2810358647">作者</a><div data-testid="tweetText">目标帖子</div><button data-testid="like" aria-label="Like"></button></article><a href="/someone/status/123"><time>now</time></a>${editor}<button data-testid="tweetButton">Reply</button></div>`});
+  try {
+    const like=a.w.document.querySelector('[data-testid="like"]');
+    like.onclick=()=>{like.dataset.testid='unlike';like.setAttribute('aria-label','Liked');};
+    await a.generate();
+    const editorNode=a.w.document.querySelector('[role="textbox"]');
+    a.w.document.querySelector('[data-testid="tweetButton"]').onclick=()=>{editorNode.textContent='';};
+    a.w.document.querySelector('[data-testid="tweetButton"]').click();
+    a.tick();
+    assert.equal(like.dataset.testid,'unlike',a.status());
+    assert.match(a.status(),/已自动点赞/);
+  } finally {a.close();}
+});
+
+test('auto-like captures the original status link when the reply modal omits it', async () => {
+  const a=app({response:()=>({ok:true,autoLikeAfterReply:true,candidates:[{id:'c1',text:'先聊这个。'}],decision:{selectedId:'c1',reviewRequired:false,confidence:0.8}}),html:`<article data-testid="tweet"><a href="/someone/status/123"><time>now</time></a><button data-testid="reply">Reply</button></article><div role="dialog"><article data-testid="tweet"><a href="/z2810358647">作者</a><div data-testid="tweetText">目标帖子</div><button data-testid="like" aria-label="Like"></button></article>${editor}<button data-testid="tweetButton">Reply</button></div>`});
+  try {
+    const like=a.w.document.querySelector('[data-testid="like"]');
+    like.onclick=()=>{like.dataset.testid='unlike';like.setAttribute('aria-label','Liked');};
+    a.w.document.querySelector('[data-testid="reply"]').click();
+    await a.generate();
+    const editorNode=a.w.document.querySelector('[role="textbox"]');
+    a.w.document.querySelector('[data-testid="tweetButton"]').onclick=()=>{editorNode.textContent='';};
+    a.w.document.querySelector('[data-testid="tweetButton"]').click();
+    a.tick();
+    assert.equal(like.dataset.testid,'unlike',a.status());
+    assert.match(a.status(),/已自动点赞/);
+  } finally {a.close();}
+});
+
+test('auto-like survives the route change caused by closing the reply modal', async () => {
+  const a=app({response:()=>({ok:true,autoLikeAfterReply:true,candidates:[{id:'c1',text:'先聊这个。'}],decision:{selectedId:'c1',reviewRequired:false,confidence:0.8}})});
+  try {
+    const like=a.w.document.createElement('button'); like.dataset.testid='like'; like.setAttribute('aria-label','43 Likes. Like');
+    like.onclick=()=>{like.dataset.testid='unlike';like.setAttribute('aria-label','44 Likes. Liked');};
+    a.w.document.querySelector('[data-testid="tweet"]').append(like);
+    await a.generate();
+    const editorNode=a.w.document.querySelector('[role="textbox"]');
+    a.w.document.querySelector('[data-testid="tweetButton"]').onclick=()=>{
+      editorNode.remove();
+      a.w.history.pushState({},'', '/home');
+    };
+    a.w.document.querySelector('[data-testid="tweetButton"]').click();
+    a.tick();
+    assert.equal(like.dataset.testid,'unlike',a.status());
+    assert.match(a.status(),/已自动点赞/);
+  } finally {a.close();}
+});
+
+test('a pending auto-like marker is resumed on the original post page', () => {
+  const a=app({url:'https://x.com/someone/status/123',html:post('123','原帖').replace('</article>','<button data-testid="unlike" aria-label="44 Likes. Liked"></button></article>'),pendingLikeMarker:{schema:'quick-reply.like.v1',url:'https://x.com/someone/status/123',createdAt:Date.now()}});
+  try {
+    a.tick();
+    assert.match(a.status(),/此前已点赞/);
+    assert.equal(a.w.sessionStorage.getItem('__xQuickReplyPendingLike.v1'),null);
+  } finally {a.close();}
+});
+
+test('a malformed pending auto-like marker is cleared and reported', () => {
+  const a=app({pendingLikeRaw:'not-json'});
+  try {
+    assert.equal(a.w.sessionStorage.getItem('__xQuickReplyPendingLike.v1'), null);
+    assert.match(a.status(),/读取原帖点赞任务失败/);
   } finally {a.close();}
 });
 
@@ -340,6 +488,20 @@ test('opening a reply from home before generation shows instructions, not a stal
     assert.equal(a.w.document.querySelector('[data-action="fill"]').hidden,true);
     assert.equal(a.calls.length,0);
   }finally{a.close();}
+});
+
+test('a visible reply dialog on the home feed is treated as a public reply surface', async () => {
+  const a=app({url:'https://x.com/home',html:''});
+  try {
+    const dialog=a.w.document.createElement('div'); dialog.setAttribute('role','dialog');
+    dialog.innerHTML=post('123','首页目标帖子')+editor+'<button data-testid="tweetButton">Reply</button>';
+    a.w.document.body.append(dialog);
+    a.tick();
+    assert.equal(a.panel().hidden,false);
+    await a.generate();
+    assert.equal(a.calls.length,1,a.status());
+    assert.equal(dialog.querySelector('[role="textbox"]').textContent,'你最想先讨论哪一部分？');
+  } finally {a.close();}
 });
 
 test('generation shows busy state and keeps real failures visible',async()=>{

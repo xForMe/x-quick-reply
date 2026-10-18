@@ -11,22 +11,9 @@
   </style>
 </head>
 <body>
-  <h1>快速回复设置</h1>
-  <p>大模型生成候选，阿里云百炼选择合适回复。请先启动本地网关；模型密钥仅在网关配置。</p>
-  <label for="gatewayUrl">本地网关 URL</label>
-  <input id="gatewayUrl" value="http://127.0.0.1:8787" placeholder="http://127.0.0.1:8787">
-  <label for="tone">默认语气</label>
-  <select id="tone"><option value="natural">自然</option><option value="concise">简洁</option><option value="polite">礼貌</option><option value="professional">专业</option></select>
-  <label for="candidateCount">候选数量（2–5）</label>
-  <input id="candidateCount" type="number" min="2" max="5" value="3">
-  <label for="replyPrompt">整体回复提示词</label>
-  <textarea id="replyPrompt" maxlength="3000" aria-describedby="promptHelp"></textarea>
-  <small id="promptHelp">生成和百炼筛选共用。可写语气、偏好的接话方式和不想出现的表达，最多 3000 字符。默认轻松幽默；严肃话题优先得体。不要填写密钥或隐私资料。</small>
-  <label for="replyExamples">我的回复示例（可选）</label>
-  <textarea id="replyExamples" maxlength="3000" aria-describedby="examplesHelp" placeholder="每行一条你自己写过的自然回复，建议 3–10 条"></textarea>
-  <small id="examplesHelp">只用于学习你的口吻，不会替代当前帖子事实或强制回复语言。示例会发送给生成模型和百炼；不要填写密钥、Cookie、私信正文或敏感资料。</small>
-  <button id="resetPrompt" type="button">恢复默认提示词</button><small>恢复只修改上方文本，点击“保存”后生效。</small>
-  <button id="save" type="button">保存</button><span id="status" role="status"></span>
+  <div id="app"></div>
+  <script src="vendor/react.production.min.js"></script>
+  <script src="vendor/react-dom.production.min.js"></script>
   <script type="module" src="options.js"></script>
 </body>
 </html>

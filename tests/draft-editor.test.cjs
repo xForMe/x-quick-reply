@@ -19,6 +19,8 @@ test('controlled Draft editor receives each candidate once and replaces its own 
   globalThis.MessageChannel=undefined;
   const React=require('react');
   const ReactDOM=require('react-dom');
+  w.React=React;
+  w.ReactDOM=ReactDOM;
   const {Editor,EditorState}=require('draft-js');
   let current=EditorState.createEmpty();
   function Controlled(){

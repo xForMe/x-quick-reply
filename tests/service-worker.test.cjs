@@ -4,6 +4,10 @@ const vm = require('node:vm');
 const fs = require('node:fs');
 const path = require('node:path');
 const source = require('./extension-fixture.cjs').readScript('service-worker.js');
+const reactRuntime = [
+  fs.readFileSync(path.join(__dirname, '../extension/src/vendor/react.production.min.js'), 'utf8'),
+  fs.readFileSync(path.join(__dirname, '../extension/src/vendor/react-dom.production.min.js'), 'utf8')
+].join('\n');
 const schemaVersion = 'quick-reply.v2';
 const candidates = [{ id: 'c1', text: '请问几点方便？' }, { id: 'c2', text: '我们先确认一下时间。' }];
 const decision = { schemaVersion, model: 'decision-model-preview', selectedId: 'c1', reviewRequired: false,
@@ -37,6 +41,7 @@ test('generation precedes real decision and uses gateway custom header', async (
   const app = runtime([{ body: { schemaVersion, candidates } }, { body: decision }]);
   const result = await app.send();
   assert.equal(result.ok, true);
+  assert.equal(result.autoLikeAfterReply, false);
   assert.equal(result.decision.selectedId, 'c1');
   assert.equal(result.decision.confidence, 0.6);
   assert.equal(app.calls.length, 2);
@@ -88,6 +93,12 @@ test('a home document navigating to a reply modal is authorized using its curren
   assert.equal(result.ok,true,result.error);assert.equal(app.calls.length,2);
 });
 
+test('a reply modal opened from the home feed is authorized while the tab stays on home',async()=>{
+  const app=runtime([{body:{schemaVersion,candidates}},{body:decision}],{tabUrl:'https://x.com/home'});
+  const result=await app.send(senderFor('https://x.com/home'),'public-reply');
+  assert.equal(result.ok,true,result.error);assert.equal(app.calls.length,2);
+});
+
 test('a stale reply sender cannot authorize a tab that has navigated home',async()=>{
   const app=runtime([],{tabUrl:'https://x.com/home'});
   const result=await app.send(senderFor('https://x.com/compose/post'),'public-reply');
@@ -128,7 +139,7 @@ test('actual page and background scripts generate and fill after a home-to-reply
   require('./clipboard-fixture.cjs').installClipboard(w);
   w.document.addEventListener('paste',event=>{event.preventDefault();event.target.textContent=event.clipboardData.getData('text/plain');});
   try{
-    const content=fs.readFileSync(path.join(__dirname,'../extension/src/content.js'),'utf8');
+    const content=`${reactRuntime}\n${fs.readFileSync(path.join(__dirname,'../extension/src/content.js'),'utf8')}`;
     assert.equal(w.eval(content).ok,true);
     w.history.pushState({},'','/compose/post');
     const dialog=w.document.createElement('div');dialog.setAttribute('role','dialog');
