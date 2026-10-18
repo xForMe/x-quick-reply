@@ -15,6 +15,8 @@ const editor = '<div data-testid="tweetTextarea_0" role="textbox" contenteditabl
 function app({html = `<div role="dialog">${post('123', '一起讨论这个想法？')}${editor}<button data-testid="tweetButton">Reply</button></div>`, url = 'https://x.com/compose/post', response, trustedTypes = false, pasteHandler, pendingLikeMarker, pendingLikeRaw} = {}) {
   const dom = new JSDOM(`<body>${html}</body>`, {url, runScripts:'outside-only', pretendToBeVisual:true});
   const w = dom.window, calls = [];
+  let now = Date.now();
+  w.Date.now = () => now;
   let messageListener;
   let listenerCount = 0;
   const intervals = [];
@@ -49,7 +51,7 @@ function app({html = `<div role="dialog">${post('123', '一起讨论这个想法
     status:()=>w.document.querySelector('[data-role="status"]').textContent,
     async generate(){w.document.querySelector('[data-action="generate"]').click(); await new Promise(resolve=>setTimeout(resolve,180));},
     open(){let result; messageListener({type:'OPEN_QUICK_REPLY'}, {id:'test'}, r=>result=r);return result;},
-    boot, tick(){intervals.filter(Boolean).forEach(fn=>fn());},reinject(){return w.eval(source);},listenerCount(){return listenerCount;},
+    boot, tick(ms=0){now += ms; intervals.filter(Boolean).forEach(fn=>fn());},reinject(){return w.eval(source);},listenerCount(){return listenerCount;},
     close(){Object.defineProperty(w.Element.prototype,'innerHTML',htmlDescriptor);w.close();}};
 }
 
@@ -79,11 +81,35 @@ test('auto-like waits for a confirmed user send and verifies the like state', as
     a.w.document.querySelector('[data-testid="tweetButton"]').onclick=()=>{editor.textContent='';};
     a.w.document.querySelector('[data-testid="tweetButton"]').click();
     assert.equal(like.dataset.testid,'like');
-    a.tick();
+    a.tick(); a.tick(4001);
     assert.equal(like.dataset.testid,'unlike');
     assert.equal(like.getAttribute('aria-label'),'44 Likes. Liked',a.status());
     assert.match(a.status(),/已自动点赞/);
   } finally {a.close();}
+});
+
+test('auto-like uses a variable post-send delay before clicking', async () => {
+  async function run(randomValue, beforeReadyMs) {
+    const a=app({response:()=>({ok:true,autoLikeAfterReply:true,candidates:[{id:'c1',text:'先聊这个。'}],decision:{selectedId:'c1',reviewRequired:false,confidence:0.8}})});
+    try {
+      Object.defineProperty(a.w.Math, 'random', {value:()=>randomValue, configurable:true});
+      const like=a.w.document.createElement('button'); like.dataset.testid='like'; like.setAttribute('aria-label','Like');
+      like.onclick=()=>{like.dataset.testid='unlike';like.setAttribute('aria-label','Liked');};
+      a.w.document.querySelector('[data-testid="tweet"]').append(like);
+      await a.generate();
+      const editorNode=a.w.document.querySelector('[role="textbox"]');
+      a.w.document.querySelector('[data-testid="tweetButton"]').onclick=()=>{editorNode.textContent='';};
+      a.w.document.querySelector('[data-testid="tweetButton"]').click();
+      a.tick();
+      assert.equal(like.dataset.testid,'like');
+      a.tick(beforeReadyMs);
+      assert.equal(like.dataset.testid,'like');
+      a.tick(1);
+      assert.equal(like.dataset.testid,'unlike',a.status());
+    } finally {a.close();}
+  }
+  await run(0,1499);
+  await run(0.99999,3999);
 });
 
 test('auto-like stays disabled unless the setting is explicitly enabled', async () => {
@@ -93,7 +119,7 @@ test('auto-like stays disabled unless the setting is explicitly enabled', async 
     a.w.document.querySelector('[data-testid="tweet"]').append(like);
     await a.generate();
     a.w.document.querySelector('[role="textbox"]').textContent='';
-    a.w.document.querySelector('[data-testid="tweetButton"]').click(); a.tick();
+    a.w.document.querySelector('[data-testid="tweetButton"]').click(); a.tick(); a.tick(4001);
     assert.equal(like.dataset.testid,'like');
   } finally {a.close();}
 });
@@ -110,6 +136,7 @@ test('auto-like also covers a manually typed public reply when the panel is open
     a.w.document.querySelector('[data-testid="tweetButton"]').onclick=()=>{textbox.textContent='';};
     a.w.document.querySelector('[data-testid="tweetButton"]').click();
     await new Promise(resolve=>setTimeout(resolve,0));
+    a.tick(); a.tick(4001);
     assert.equal(textbox.textContent,'');
     assert.equal(like.dataset.testid,'unlike',a.status());
     assert.match(a.status(),/已自动点赞/);
@@ -135,7 +162,7 @@ test('auto-like relocates the target and ignores the count in the aria label', a
       replacement.append(replacementLike); a.w.document.body.append(replacement);
     };
     a.w.document.querySelector('[data-testid="tweetButtonInline"]').click();
-    a.tick();
+    a.tick(); a.tick(4001);
     const replacement=a.w.document.querySelector('[data-testid="tweet"]');
     assert.equal(replacement.querySelector('[aria-label$="Liked"]').getAttribute('aria-label'),'42,002 Likes. Liked',a.status());
     assert.match(a.status(),/已自动点赞/);
@@ -151,7 +178,7 @@ test('auto-like reads a status link rendered beside the tweet wrapper', async ()
     const editorNode=a.w.document.querySelector('[role="textbox"]');
     a.w.document.querySelector('[data-testid="tweetButton"]').onclick=()=>{editorNode.textContent='';};
     a.w.document.querySelector('[data-testid="tweetButton"]').click();
-    a.tick();
+    a.tick(); a.tick(4001);
     assert.equal(like.dataset.testid,'unlike',a.status());
     assert.match(a.status(),/已自动点赞/);
   } finally {a.close();}
@@ -167,7 +194,7 @@ test('auto-like captures the original status link when the reply modal omits it'
     const editorNode=a.w.document.querySelector('[role="textbox"]');
     a.w.document.querySelector('[data-testid="tweetButton"]').onclick=()=>{editorNode.textContent='';};
     a.w.document.querySelector('[data-testid="tweetButton"]').click();
-    a.tick();
+    a.tick(); a.tick(4001);
     assert.equal(like.dataset.testid,'unlike',a.status());
     assert.match(a.status(),/已自动点赞/);
   } finally {a.close();}
@@ -186,7 +213,7 @@ test('auto-like survives the route change caused by closing the reply modal', as
       a.w.history.pushState({},'', '/home');
     };
     a.w.document.querySelector('[data-testid="tweetButton"]').click();
-    a.tick();
+    a.tick(); a.tick(4001);
     assert.equal(like.dataset.testid,'unlike',a.status());
     assert.match(a.status(),/已自动点赞/);
   } finally {a.close();}

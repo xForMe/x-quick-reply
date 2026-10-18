@@ -6,6 +6,10 @@
   const RUNTIME_KEY = "__xQuickReplyRuntime";
   const PENDING_LIKE_KEY = "__xQuickReplyPendingLike.v1";
   const PENDING_LIKE_MAX_AGE = 30000;
+  const LIKE_DELAY_MIN_MS = 1500;
+  const LIKE_DELAY_MAX_MS = 4000;
+  const SEND_CONFIRMATION_TIMEOUT_MS = 5000;
+  const LIKE_TARGET_TIMEOUT_MS = 5000;
   try {
   if (!globalThis.React || !globalThis.ReactDOM) throw new Error("React runtime 未加载，无法初始化快速回复面板");
   const PANEL_ID = "quick-reply-panel";
@@ -295,8 +299,10 @@
         return;
       }
       operation = { source: likeSource, clicked: false, sendConfirmed: false, targetLogged: false,
-        likeLogged: false, deadline: Date.now() + 5000, timer: null };
-      log("operation-started", { timeoutMs: 5000 });
+        likeLogged: false, confirmationDeadline: Date.now() + SEND_CONFIRMATION_TIMEOUT_MS,
+        likeReadyAt: null, deadline: null, timer: null };
+      log("operation-started", { confirmationTimeoutMs: SEND_CONFIRMATION_TIMEOUT_MS,
+        likeDelayRangeMs: [LIKE_DELAY_MIN_MS, LIKE_DELAY_MAX_MS] });
       setStatus("已点击发送，正在确认回复并点赞原帖…");
       startChecking();
     }
@@ -320,8 +326,9 @@
       if (!targetUrl || statusIdFromHref(location.href) !== statusIdFromHref(targetUrl)) return;
       operation = { source: { url: location.href, kind: "public-reply", target: null, editor: null,
         targetLinks: [targetUrl] }, clicked: false, sendConfirmed: true, targetLogged: false,
-        likeLogged: false, deadline: Date.now() + 10000, timer: null, navigationStarted: true };
-      log("operation-restored", { timeoutMs: 10000 });
+        likeLogged: false, likeReadyAt: Date.now(), deadline: Date.now() + LIKE_TARGET_TIMEOUT_MS,
+        timer: null, navigationStarted: true };
+      log("operation-restored", { timeoutMs: LIKE_TARGET_TIMEOUT_MS });
       setStatus("已打开原帖，正在确认点赞按钮…");
       startChecking();
     }
@@ -342,13 +349,21 @@
       const editorCleared = operation.source.editor?.isConnected && !editorText(operation.source.editor).trim();
       // 清空或卸载编辑器才算页面确认发送；不能因为发送按钮被点击就提前点赞。
       if (!editorGone && !editorCleared) {
-        if (Date.now() >= operation.deadline) return finish(false, "发送未确认，未自动点赞；未重试");
+        if (Date.now() >= operation.confirmationDeadline) return finish(false, "发送未确认，未自动点赞；未重试");
         return;
       }
       if (!operation.sendConfirmed) {
         operation.sendConfirmed = true;
-        log("reply-send-confirmed", { editorGone, editorCleared });
+        const delayMs = randomLikeDelayMs();
+        operation.likeReadyAt = Date.now() + delayMs;
+        operation.deadline = operation.likeReadyAt + LIKE_TARGET_TIMEOUT_MS;
+        log("reply-send-confirmed", { editorGone, editorCleared, delayMs, likeReadyAt: operation.likeReadyAt });
+        setStatus("回复已发送，稍后确认点赞原帖…");
       }
+      // Keep a variable, human-like pause between the confirmed reply and the
+      // like action. The target is resolved only after the pause so a missing
+      // target cannot trigger an immediate navigation/click sequence.
+      if (Date.now() < operation.likeReadyAt) return;
       const target = findLikeTarget(operation.source);
       const targetUrl = findTargetStatusUrl(operation.source);
       if (!targetUrl) return finish(false, "回复已发送，但没有可靠的原帖链接；未自动跳转或点赞");
@@ -428,6 +443,10 @@
       const selector = '[data-testid="like"], [data-testid="unlike"], [data-testid*="like"], [aria-label], [role="button"]';
       return [...target.querySelectorAll(selector)].filter(isLikeControl)
         .find((button) => visible(button) && !button.disabled && button.getAttribute("aria-disabled") !== "true") || null;
+    }
+
+    function randomLikeDelayMs() {
+      return LIKE_DELAY_MIN_MS + Math.floor(Math.random() * (LIKE_DELAY_MAX_MS - LIKE_DELAY_MIN_MS + 1));
     }
 
     function isLiked(button) {
