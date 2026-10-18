@@ -89,6 +89,12 @@ test('a home document navigating to a reply modal is authorized using its curren
   assert.equal(result.ok,true,result.error);assert.equal(app.calls.length,2);
 });
 
+test('a reply modal opened from the home feed is authorized while the tab stays on home',async()=>{
+  const app=runtime([{body:{schemaVersion,candidates}},{body:decision}],{tabUrl:'https://x.com/home'});
+  const result=await app.send(senderFor('https://x.com/home'),'public-reply');
+  assert.equal(result.ok,true,result.error);assert.equal(app.calls.length,2);
+});
+
 test('a stale reply sender cannot authorize a tab that has navigated home',async()=>{
   const app=runtime([],{tabUrl:'https://x.com/home'});
   const result=await app.send(senderFor('https://x.com/compose/post'),'public-reply');

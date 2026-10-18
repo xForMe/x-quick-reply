@@ -17,7 +17,7 @@ async function authorizeSender(sender, kind) {
   // the current route without replacing that document. Query Chrome for the
   // current tab instead of treating the document's old route as current.
   const tab = await readSourceTab(sender.tab.id);
-  if (!isConversationUrl(tab.url, kind)) throw new Error("当前 X 标签页不在帖子回复页面或具体私信会话，请重新打开回复弹窗");
+  if (!isConversationUrl(tab.url, kind, sender.url)) throw new Error("当前 X 标签页不在帖子回复页面或具体私信会话，请重新打开回复弹窗");
   if (new URL(tab.url).origin !== new URL(sender.url).origin) throw new Error("调用来源校验失败：标签页站点已变化，请刷新 X 页面");
   return { tabId: sender.tab.id, url: tab.url };
 }
@@ -115,12 +115,23 @@ function isXUrl(value) {
   catch { return false; }
 }
 
-function isConversationUrl(value, kind) {
+function isConversationUrl(value, kind, senderValue = value) {
   try {
     if (!isXUrl(value)) return false;
     const url = new URL(value);
     if (kind === "direct-message") return /^\/(i\/chat|messages)\/[^/]+/.test(url.pathname);
-    if (kind === "public-reply") return url.pathname === "/compose/post" || /^\/[^/]+\/status\/\d+\/?$/.test(url.pathname);
+    if (kind === "public-reply") {
+      if (url.pathname === "/compose/post" || /^\/[^/]+\/status\/\d+\/?$/.test(url.pathname)) return true;
+      // A reply dialog opened from the home/feed surface can keep the tab URL
+      // at /home. The content script still validates one visible target post
+      // and one editor before sending this request.
+      return isFeedPath(url.pathname) && isFeedPath(new URL(senderValue).pathname);
+    }
     return false;
   } catch { return false; }
+}
+
+function isFeedPath(pathname) {
+  return pathname === "/home" || pathname === "/explore" || pathname === "/notifications"
+    || pathname === "/i/bookmarks" || pathname === "/search" || /^\/[^/]+$/.test(pathname);
 }

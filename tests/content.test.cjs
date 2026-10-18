@@ -434,6 +434,20 @@ test('opening a reply from home before generation shows instructions, not a stal
   }finally{a.close();}
 });
 
+test('a visible reply dialog on the home feed is treated as a public reply surface', async () => {
+  const a=app({url:'https://x.com/home',html:''});
+  try {
+    const dialog=a.w.document.createElement('div'); dialog.setAttribute('role','dialog');
+    dialog.innerHTML=post('123','首页目标帖子')+editor+'<button data-testid="tweetButton">Reply</button>';
+    a.w.document.body.append(dialog);
+    a.tick();
+    assert.equal(a.panel().hidden,false);
+    await a.generate();
+    assert.equal(a.calls.length,1,a.status());
+    assert.equal(dialog.querySelector('[role="textbox"]').textContent,'你最想先讨论哪一部分？');
+  } finally {a.close();}
+});
+
 test('generation shows busy state and keeps real failures visible',async()=>{
   let finish;
   const a=app({response:()=>new Promise(resolve=>finish=resolve)});

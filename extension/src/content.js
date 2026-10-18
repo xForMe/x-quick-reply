@@ -346,7 +346,13 @@
 
   function editorText(editor) { return editor ? ("value" in editor ? editor.value : editor.textContent || "") : ""; }
   function isConversation() { return /^\/(i\/chat|messages)\/[^/]+/.test(location.pathname); }
-  function isReplyRoute() { return location.pathname === "/compose/post" || /^\/[^/]+\/status\/\d+\/?$/.test(location.pathname); }
+  function isReplyRoute() {
+    return location.pathname === "/compose/post" || /^\/[^/]+\/status\/\d+\/?$/.test(location.pathname) || hasVisibleReplyDialog();
+  }
+  function hasVisibleReplyDialog() {
+    const selector = '[data-testid^="tweetTextarea_"][contenteditable="true"][role="textbox"]';
+    return [...document.querySelectorAll(selector)].some((editor) => visible(editor) && editor.closest('[role="dialog"]'));
+  }
   function visible(node) { return node.getClientRects().length && !node.closest('[aria-hidden="true"]'); }
   function readContext() {
     if (isConversation()) {
