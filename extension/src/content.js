@@ -21,12 +21,14 @@
   let dismissed = false;
   let inserting = false;
   let pendingFill = null;
-  let autoLikeAfterReply = false;
-  let autoLikeSettingResolved = false;
-  let pendingLike = null;
   let panelMount = null;
-  let panel = null;
   let ui = { status: READY_TEXT, statusError: false, generating: false, routeHidden: false };
+  const autoLike = createAutoLikeController({
+    getSource: () => source,
+    readContext,
+    isReplyRoute,
+    setStatus
+  });
 
   // A DOM node is not evidence that this extension context has a live listener.
   document.getElementById(PANEL_ID)?.remove();
@@ -39,7 +41,7 @@
     if (inserting || !source?.editor.contains(event.target)) return;
     // Sending a reply can clear the controlled editor and emit an input event;
     // keep the send confirmation alive while the one-shot like operation runs.
-    if (pendingLike?.source === source) return;
+    if (autoLike.isPending()) return;
     // Framework notifications for the exact expected text do not transfer
     // ownership. Any actual user input or different text invalidates it.
     if (!event.isTrusted && editorText(source.editor) === (pendingFill?.text ?? source.draft)) return;
@@ -47,38 +49,7 @@
   };
   document.addEventListener("input", onInput, true);
   const onDocumentClick = (event) => {
-    const button = findSendButton(event.target);
-    if (pendingLike || !isReplyRoute()) return;
-    if (!button || button.disabled || button.getAttribute("aria-disabled") === "true") return;
-    let likeSource = source?.owned && source.kind === "public-reply" ? source : null;
-    if (!likeSource) {
-      try {
-        const context = readContext();
-        if (context.kind !== "public-reply" || !context.dialog?.contains(button)) return;
-        likeSource = { url: location.href, kind: context.kind, editor: context.editor, target: context.target,
-          dialog: context.dialog, targetLinks: context.targetLinks };
-      } catch { return; }
-    } else if (!likeSource.dialog?.contains(button)) {
-      return;
-    }
-    // 只有用户实际点击 X 的发送按钮，且当前弹窗仍是最初识别的回复目标，
-    // 才允许启动一次点赞任务；生成或回填草稿本身不会触发点赞。
-    const start = (enabled) => {
-      if (!enabled || likeSource.url !== location.href) return;
-      startPendingLike(likeSource);
-    };
-    if (autoLikeSettingResolved) return start(autoLikeAfterReply);
-    // StorageArea 方法必须保留 storage 作为调用对象，不能先取出 get 再裸调用。
-    const storage = chrome.storage?.local;
-    if (!storage || typeof storage.get !== "function") {
-      return setStatus("读取自动点赞设置失败：chrome.storage.local.get 不可用", true);
-    }
-    Promise.resolve(storage.get({ autoLikeAfterReply: false })).then((settings) => {
-      autoLikeSettingResolved = true;
-      if (typeof settings.autoLikeAfterReply !== "boolean") return setStatus("自动点赞开关设置无效，请重新保存扩展设置", true);
-      autoLikeAfterReply = settings.autoLikeAfterReply;
-      start(autoLikeAfterReply);
-    }).catch((error) => setStatus(`读取自动点赞设置失败：${error.message}`, true));
+    autoLike.handleSendClick(event.target);
   };
   document.addEventListener("click", onDocumentClick, true);
   const onMessage = (message, _sender, sendResponse) => {
@@ -91,18 +62,18 @@
   };
   chrome.runtime.onMessage.addListener(onMessage);
   const timer = observeUrlChanges();
-  globalThis[RUNTIME_KEY] = { version: VERSION, panel, onMessage, dispose() {
+  globalThis[RUNTIME_KEY] = { version: VERSION, onMessage, dispose() {
     generation++;
     clearTimeout(pendingFill?.timer);
     pendingFill = null;
     clearInterval(timer);
-    clearPendingLike();
+    autoLike.dispose();
     document.removeEventListener("input", onInput, true);
     document.removeEventListener("click", onDocumentClick, true);
     ReactDOM.unmountComponentAtNode(panelMount);
     panelMount.remove();
   } };
-  restorePendingLike();
+  autoLike.restore();
 
   function renderPanel() {
     if (!panelMount) return;
@@ -120,20 +91,32 @@
       onAction: handlePanelAction,
       onCandidateSelect: selectCandidate
     }), panelMount);
-    panel = panelMount.querySelector(`#${PANEL_ID}`);
   }
 
   function handlePanelAction(action) {
-    if (action === "close") { dismissed = true; invalidate("面板已关闭，旧请求已取消"); }
-    if (action === "generate") generate();
-    if (action === "fill") fillSelected();
-    if (action === "diagnostics") copyDiagnostics();
+    switch (action) {
+      case "close":
+        dismissed = true;
+        invalidate("面板已关闭，旧请求已取消");
+        break;
+      case "generate":
+        generate();
+        break;
+      case "fill":
+        fillSelected();
+        break;
+      case "diagnostics":
+        copyDiagnostics();
+        break;
+      default:
+        throw new Error(`未知面板操作：${action}`);
+    }
   }
 
   function selectCandidate(candidateId) {
     if (state.decision?.reviewRequired || pendingFill) return;
     state.selectedId = candidateId;
-    renderCandidates();
+    renderPanel();
   }
 
   function QuickReplyPanel(props) {
@@ -175,7 +158,7 @@
     const current = ++generation;
     source = null;
     state = { candidates: [], decision: null, mode: "" };
-    renderCandidates();
+    renderPanel();
     let response;
     try {
       const context = readContext();
@@ -196,48 +179,243 @@
     if (current !== generation) return;
     if (!sourceIsCurrent()) return setStatus("会话或草稿已变化，请重新生成", true);
     if (!response?.ok) return setStatus(response?.error || "生成失败", true);
-    autoLikeAfterReply = response.autoLikeAfterReply === true;
-    autoLikeSettingResolved = true;
+    autoLike.configure(response.autoLikeAfterReply === true);
     state = { candidates: response.candidates, decision: response.decision, selectedId: response.decision.selectedId, mode: response.mode };
-    renderCandidates();
+    renderPanel();
     if (state.decision.reviewRequired) return setStatus("百炼未选择合适回复，请人工起草", true);
     setStatus("已生成，百炼已选择候选");
     fillSelected();
   }
 
-  function startPendingLike(likeSource) {
-    if (pendingLike) return;
-    // 这是发送后的单次状态机：先确认发送迹象，再定位原帖，最后点击并核验点赞。
-    pendingLike = { source: likeSource, clicked: false, deadline: Date.now() + 5000, timer: null };
-    setStatus("已点击发送，正在确认回复并点赞原帖…");
-    pendingLike.timer = setInterval(checkReplyAndLike, 100);
-    checkReplyAndLike();
-  }
+  /**
+   * Owns the one-shot send -> original post -> like workflow.
+   * The host only supplies context reading and status reporting; DOM polling,
+   * navigation persistence, and like-state verification stay inside this module.
+   */
+  function createAutoLikeController({ getSource, readContext, isReplyRoute, setStatus }) {
+    let enabled = false;
+    let settingResolved = false;
+    let operation = null;
 
-  function restorePendingLike() {
-    let marker;
-    try {
-      const raw = sessionStorage.getItem(PENDING_LIKE_KEY);
-      if (!raw) return;
-      marker = JSON.parse(raw);
-    } catch (error) {
-      clearPendingLikeMarker();
-      setStatus(`读取原帖点赞任务失败：${error.message}`, true);
-      return;
+    return {
+      configure,
+      isEnabled: () => enabled,
+      isPending: () => !!operation,
+      handleSendClick,
+      restore,
+      handleRouteChange,
+      cancel: (removeMarker = false) => clearOperation(removeMarker),
+      dispose: () => clearOperation()
+    };
+
+    function configure(value) {
+      enabled = value === true;
+      settingResolved = true;
     }
-    if (!marker || marker.schema !== "quick-reply.like.v1" || typeof marker.url !== "string"
-      || !Number.isInteger(marker.createdAt) || Date.now() - marker.createdAt > PENDING_LIKE_MAX_AGE) {
-      clearPendingLikeMarker();
-      return;
+
+    function handleSendClick(node) {
+      const button = findSendButton(node);
+      if (operation || !isReplyRoute() || !isEnabledSendButton(button)) return;
+      const likeSource = resolveLikeSource(button);
+      if (!likeSource) return;
+      if (settingResolved) return startIfEnabled(likeSource);
+
+      // StorageArea methods must retain their receiver; calling get detached from
+      // chrome.storage.local can fail in Chrome even when the method exists.
+      const storage = chrome.storage?.local;
+      if (!storage || typeof storage.get !== "function") {
+        return setStatus("读取自动点赞设置失败：chrome.storage.local.get 不可用", true);
+      }
+      Promise.resolve(storage.get({ autoLikeAfterReply: false })).then((settings) => {
+        settingResolved = true;
+        if (typeof settings.autoLikeAfterReply !== "boolean") {
+          return setStatus("自动点赞开关设置无效，请重新保存扩展设置", true);
+        }
+        enabled = settings.autoLikeAfterReply;
+        startIfEnabled(likeSource);
+      }).catch((error) => setStatus(`读取自动点赞设置失败：${error.message}`, true));
     }
-    const targetUrl = canonicalStatusUrl(marker.url);
-    if (!targetUrl || statusIdFromHref(location.href) !== statusIdFromHref(targetUrl)) return;
-    // 原帖通过完整导航打开后，内存中的 pendingLike 已丢失；这里用短时标记恢复一次任务。
-    pendingLike = { source: { url: location.href, kind: "public-reply", target: null, editor: null, targetLinks: [targetUrl] },
-      clicked: false, deadline: Date.now() + 10000, timer: null, navigationStarted: true };
-    setStatus("已打开原帖，正在确认点赞按钮…");
-    pendingLike.timer = setInterval(checkReplyAndLike, 100);
-    checkReplyAndLike();
+
+    function resolveLikeSource(button) {
+      const current = getSource();
+      if (current?.owned && current.kind === "public-reply") {
+        return current.dialog?.contains(button) ? current : null;
+      }
+      try {
+        const context = readContext();
+        if (context.kind !== "public-reply" || !context.dialog?.contains(button)) return null;
+        return { url: location.href, kind: context.kind, editor: context.editor, target: context.target,
+          dialog: context.dialog, targetLinks: context.targetLinks };
+      } catch {
+        return null;
+      }
+    }
+
+    function startIfEnabled(likeSource) {
+      if (!enabled || likeSource.url !== location.href) return;
+      operation = { source: likeSource, clicked: false, deadline: Date.now() + 5000, timer: null };
+      setStatus("已点击发送，正在确认回复并点赞原帖…");
+      startChecking();
+    }
+
+    function restore() {
+      let marker;
+      try {
+        const raw = sessionStorage.getItem(PENDING_LIKE_KEY);
+        if (!raw) return;
+        marker = JSON.parse(raw);
+      } catch (error) {
+        clearPendingLikeMarker();
+        return setStatus(`读取原帖点赞任务失败：${error.message}`, true);
+      }
+      if (!marker || marker.schema !== "quick-reply.like.v1" || typeof marker.url !== "string"
+        || !Number.isInteger(marker.createdAt) || Date.now() - marker.createdAt > PENDING_LIKE_MAX_AGE) {
+        clearPendingLikeMarker();
+        return;
+      }
+      const targetUrl = canonicalStatusUrl(marker.url);
+      if (!targetUrl || statusIdFromHref(location.href) !== statusIdFromHref(targetUrl)) return;
+      operation = { source: { url: location.href, kind: "public-reply", target: null, editor: null,
+        targetLinks: [targetUrl] }, clicked: false, deadline: Date.now() + 10000, timer: null,
+        navigationStarted: true };
+      setStatus("已打开原帖，正在确认点赞按钮…");
+      startChecking();
+    }
+
+    function handleRouteChange() {
+      if (operation) operation.source.url = location.href;
+    }
+
+    function startChecking() {
+      operation.timer = setInterval(check, 100);
+      check();
+    }
+
+    function check() {
+      const current = getSource();
+      if (!operation || (current && operation.source !== current)) return clearOperation();
+      const editorGone = !operation.source.editor?.isConnected;
+      const editorCleared = operation.source.editor?.isConnected && !editorText(operation.source.editor).trim();
+      // 清空或卸载编辑器才算页面确认发送；不能因为发送按钮被点击就提前点赞。
+      if (!editorGone && !editorCleared) {
+        if (Date.now() >= operation.deadline) return finish(false, "发送未确认，未自动点赞；未重试");
+        return;
+      }
+      const target = findLikeTarget(operation.source);
+      const targetUrl = findTargetStatusUrl(operation.source);
+      if (!targetUrl) return finish(false, "回复已发送，但没有可靠的原帖链接；未自动跳转或点赞");
+      if (!target && !operation.navigationStarted) return navigateToTarget(targetUrl);
+      if (!target) {
+        if (Date.now() >= operation.deadline) return finish(false, "已打开原帖，但未找到目标帖子；未自动重试");
+        return;
+      }
+      const like = findLikeButton(target);
+      if (!like) {
+        if (Date.now() >= operation.deadline) return finish(false, "已打开原帖，但未找到点赞按钮；未自动重试");
+        return;
+      }
+      if (isLiked(like)) return finish(true, "回复已发送，目标帖子此前已点赞");
+      if (!operation.clicked) {
+        // 只允许点击一次；点击后必须从 DOM 状态确认已点赞。
+        operation.clicked = true;
+        like.click();
+      }
+      if (isLiked(like)) return finish(true, "回复已发送，已自动点赞目标帖子");
+      if (Date.now() >= operation.deadline) return finish(false, "已尝试点赞，但页面未确认成功；未自动重试");
+    }
+
+    function findLikeTarget(operationSource) {
+      if (operationSource.target?.isConnected) return operationSource.target;
+      const statusIds = [...new Set((operationSource.targetLinks || []).map(statusIdFromHref).filter(Boolean))];
+      if (!statusIds.length) return null;
+      return [...document.querySelectorAll('[data-testid="tweet"]')].find((post) =>
+        statusIds.some((id) => [...post.querySelectorAll('a[href]')]
+          .some((anchor) => statusIdFromHref(anchor.getAttribute("href")) === id)));
+    }
+
+    function findTargetStatusUrl(operationSource) {
+      return (operationSource.targetLinks || []).map(canonicalStatusUrl).find(Boolean) || null;
+    }
+
+    function navigateToTarget(targetUrl) {
+      operation.navigationStarted = true;
+      try {
+        // 完整导航会销毁当前 content script，先保存脱敏 URL 供原帖页恢复。
+        sessionStorage.setItem(PENDING_LIKE_KEY, JSON.stringify({ schema: "quick-reply.like.v1",
+          url: targetUrl, createdAt: Date.now() }));
+        setStatus("回复已发送，正在打开原帖确认点赞…");
+        location.assign(targetUrl);
+        return true;
+      } catch (error) {
+        operation.navigationStarted = false;
+        return finish(false, `打开原帖失败：${error.message}`);
+      }
+    }
+
+    function findLikeButton(target) {
+      const selector = '[data-testid="like"], [data-testid="unlike"], [data-testid*="like"], [aria-label], [role="button"]';
+      return [...target.querySelectorAll(selector)].filter(isLikeControl)
+        .find((button) => visible(button) && !button.disabled && button.getAttribute("aria-disabled") !== "true") || null;
+    }
+
+    function isLiked(button) {
+      return button?.getAttribute("data-testid") === "unlike" || button?.getAttribute("aria-pressed") === "true"
+        || ["liked", "取消喜欢", "已喜欢"].includes(likeLabelState(button?.getAttribute("aria-label")));
+    }
+
+    function isLikeControl(button) {
+      const testId = button?.getAttribute("data-testid") || "";
+      return /^(?:un)?like(?:button)?$/i.test(testId) || !!likeLabelState(button?.getAttribute("aria-label"));
+    }
+
+    function likeLabelState(label) {
+      // 点赞数量可能位于 aria-label 前缀；只读取末尾状态词。
+      const match = String(label || "").trim().match(/(?:^|[.。:：]\s*)(Like|Liked|喜欢|已喜欢|取消喜欢)\s*$/i);
+      return match?.[1]?.toLowerCase() || null;
+    }
+
+    function findSendButton(node) {
+      return node instanceof Element ? node.closest('[data-testid^="tweetButton"]') : null;
+    }
+
+    function isEnabledSendButton(button) {
+      return !!button && !button.disabled && button.getAttribute("aria-disabled") !== "true";
+    }
+
+    function statusIdFromHref(href) {
+      return String(href || "").match(/\/status\/(\d+)(?:[/?#]|$)/)?.[1] || null;
+    }
+
+    function canonicalStatusUrl(href) {
+      try {
+        const url = new URL(href, location.origin);
+        if (!["x.com", "twitter.com"].includes(url.hostname) || !statusIdFromHref(url.href)) return null;
+        url.search = "";
+        url.hash = "";
+        return url.href;
+      } catch {
+        return null;
+      }
+    }
+
+    function finish(success, message) {
+      clearOperation(true);
+      setStatus(message, !success);
+    }
+
+    function clearOperation(removeMarker = false) {
+      if (operation?.timer) clearInterval(operation.timer);
+      if (removeMarker) clearPendingLikeMarker();
+      operation = null;
+    }
+
+    function clearPendingLikeMarker() {
+      try {
+        sessionStorage.removeItem(PENDING_LIKE_KEY);
+      } catch {
+        // 清理失败不会伪造点赞成功；标记会在下次恢复时按时效校验。
+      }
+    }
   }
 
   function readConversation(editor) {
@@ -263,10 +441,6 @@
     }).reverse();
   }
 
-  function renderCandidates() {
-    renderPanel();
-  }
-
   function fillSelected() {
     if (pendingFill) return;
     if (!sourceIsCurrent()) return invalidate("会话或草稿已变化，请重新生成");
@@ -277,7 +451,7 @@
     if (source.owned && source.draft === selected.text) return setStatus("已回填此候选，无需重复填入；请检查后手动发送");
     const operation = { source, text: selected.text, timer: null };
     pendingFill = operation;
-    renderCandidates();
+    renderPanel();
     setGenerating(false);
     setStatus("正在回填并核验输入框…");
     inserting = true;
@@ -314,135 +488,12 @@
       source.draft = operation.text;
       source.owned = true;
       pendingFill = null;
-      renderCandidates();
+      renderPanel();
       setGenerating(false);
-      setStatus(autoLikeAfterReply && source.kind === "public-reply"
+      setStatus(autoLike.isEnabled() && source.kind === "public-reply"
         ? "已回填输入框，可切换候选后再次回填；请检查后手动发送，发送成功后将打开原帖并自动点赞"
         : "已回填输入框，可切换候选后再次回填；请检查后手动发送");
     }, 150);
-  }
-
-  function checkReplyAndLike() {
-    const operation = pendingLike;
-    if (!operation || (source && operation.source !== source)) return clearPendingLike();
-    const editorGone = !operation.source.editor?.isConnected;
-    const editorCleared = operation.source.editor?.isConnected && !editorText(operation.source.editor).trim();
-    // 清空或卸载编辑器才算页面确认发送；否则不能因为发送按钮被点击就提前点赞。
-    if (!editorGone && !editorCleared) {
-      if (Date.now() >= operation.deadline) return finishLike(false, "发送未确认，未自动点赞；未重试");
-      return;
-    }
-    const target = findLikeTarget(operation.source);
-    const targetUrl = findTargetStatusUrl(operation.source);
-    if (!targetUrl) return finishLike(false, "回复已发送，但没有可靠的原帖链接；未自动跳转或点赞");
-    if (!target && !operation.navigationStarted) return navigateToTarget(operation, targetUrl);
-    if (!target) {
-      if (Date.now() >= operation.deadline) return finishLike(false, "已打开原帖，但未找到目标帖子；未自动重试");
-      return;
-    }
-    const like = target && findLikeButton(target);
-    if (!like) {
-      if (Date.now() >= operation.deadline) return finishLike(false, "已打开原帖，但未找到点赞按钮；未自动重试");
-      return;
-    }
-    if (isLiked(like)) return finishLike(true, "回复已发送，目标帖子此前已点赞");
-    if (!operation.clicked) {
-      // 只允许点击一次；点击后必须从 DOM 状态确认已点赞，不能把 click() 本身当成成功。
-      operation.clicked = true;
-      like.click();
-    }
-    if (isLiked(like)) return finishLike(true, "回复已发送，已自动点赞目标帖子");
-    if (Date.now() >= operation.deadline) return finishLike(false, "已尝试点赞，但页面未确认成功；未自动重试");
-  }
-
-  function findLikeTarget(operationSource) {
-    if (operationSource.target?.isConnected) return operationSource.target;
-    // 发送后弹窗可能被 X 卸载。此时只用唯一状态 ID 找回原帖，不能用用户主页链接猜目标。
-    const statusIds = [...new Set((operationSource.targetLinks || [])
-      .map(statusIdFromHref).filter(Boolean))];
-    if (!statusIds.length) return null;
-    return [...document.querySelectorAll('[data-testid="tweet"]')].find((post) =>
-      statusIds.some((id) => [...post.querySelectorAll('a[href]')].some((anchor) => statusIdFromHref(anchor.getAttribute("href")) === id)));
-  }
-
-  function findTargetStatusUrl(operationSource) {
-    return (operationSource.targetLinks || []).map(canonicalStatusUrl).find(Boolean) || null;
-  }
-
-  function navigateToTarget(operation, targetUrl) {
-    operation.navigationStarted = true;
-    try {
-      // 完整导航会销毁当前 content script，所以先保存脱敏 URL，供原帖页恢复一次任务。
-      sessionStorage.setItem(PENDING_LIKE_KEY, JSON.stringify({ schema: "quick-reply.like.v1", url: targetUrl, createdAt: Date.now() }));
-      setStatus("回复已发送，正在打开原帖确认点赞…");
-      location.assign(targetUrl);
-      return true;
-    } catch (error) {
-      operation.navigationStarted = false;
-      return finishLike(false, `打开原帖失败：${error.message}`);
-    }
-  }
-
-  function findLikeButton(target) {
-    // X 的点赞数量会出现在 aria-label 前缀中；筛选交给 isLikeControl，只判断语义状态词。
-    const selector = '[data-testid="like"], [data-testid="unlike"], [data-testid*="like"], [aria-label], [role="button"]';
-    return [...target.querySelectorAll(selector)]
-      .filter((button) => isLikeControl(button))
-      .find((button) => visible(button) && !button.disabled && button.getAttribute("aria-disabled") !== "true") || null;
-  }
-
-  function isLiked(button) {
-    // 真实 X 页面点赞后通常同时出现 data-testid="unlike" 和 aria-label 末尾 "Liked"。
-    return button?.getAttribute("data-testid") === "unlike" || button?.getAttribute("aria-pressed") === "true"
-      || ["liked", "取消喜欢", "已喜欢"].includes(likeLabelState(button?.getAttribute("aria-label")));
-  }
-
-  function isLikeControl(button) {
-    const testId = button?.getAttribute("data-testid") || "";
-    return /^(?:un)?like(?:button)?$/i.test(testId) || !!likeLabelState(button?.getAttribute("aria-label"));
-  }
-
-  function likeLabelState(label) {
-    // X prefixes the state with a localized count, e.g. "43 Likes. Like".
-    // Only the trailing state word is semantic; the count and its wording are not.
-    const match = String(label || "").trim().match(/(?:^|[.。:：]\s*)(Like|Liked|喜欢|已喜欢|取消喜欢)\s*$/i);
-    return match?.[1]?.toLowerCase() || null;
-  }
-
-  function findSendButton(node) {
-    if (!(node instanceof Element)) return null;
-    const button = node.closest('[data-testid^="tweetButton"]');
-    if (!button) return null;
-    return button;
-  }
-
-  function statusIdFromHref(href) {
-    const match = String(href || "").match(/\/status\/(\d+)(?:[/?#]|$)/);
-    return match?.[1] || null;
-  }
-
-  function canonicalStatusUrl(href) {
-    try {
-      const url = new URL(href, location.origin);
-      if (!["x.com", "twitter.com"].includes(url.hostname) || !statusIdFromHref(url.href)) return null;
-      url.search = ""; url.hash = "";
-      return url.href;
-    } catch { return null; }
-  }
-
-  function clearPendingLikeMarker() {
-    try { sessionStorage.removeItem(PENDING_LIKE_KEY); } catch { /* no-op: expiration will bound a stale marker */ }
-  }
-
-  function finishLike(success, message) {
-    clearPendingLike(true);
-    setStatus(message, !success);
-  }
-
-  function clearPendingLike(removeMarker = false) {
-    if (pendingLike?.timer) clearInterval(pendingLike.timer);
-    if (removeMarker) clearPendingLikeMarker();
-    pendingLike = null;
   }
 
   function findDmEditor() {
@@ -463,13 +514,19 @@
   }
   function visible(node) { return node.getClientRects().length && !node.closest('[aria-hidden="true"]'); }
   function readContext() {
-    if (isConversation()) {
-      const editor = findDmEditor();
-      if (!editor) throw new Error("读取失败：没有找到唯一的私信输入框");
-      const messages = readConversation(editor);
-      if (!messages.length) throw new Error("读取失败：没有读到当前私信消息");
-      return { kind: "direct-message", messages, editor, target: editor.closest('[data-testid="DMConversation"], [data-testid="DmActivityViewport"]') };
-    }
+    return isConversation() ? readDirectMessageContext() : readPublicReplyContext();
+  }
+
+  function readDirectMessageContext() {
+    const editor = findDmEditor();
+    if (!editor) throw new Error("读取失败：没有找到唯一的私信输入框");
+    const messages = readConversation(editor);
+    if (!messages.length) throw new Error("读取失败：没有读到当前私信消息");
+    return { kind: "direct-message", messages, editor,
+      target: editor.closest('[data-testid="DMConversation"], [data-testid="DmActivityViewport"]') };
+  }
+
+  function readPublicReplyContext() {
     if (!isReplyRoute()) throw new Error("请点击帖子的回复按钮打开回复弹窗，或打开具体私信会话");
     // A single reply modal can have several nested dialog wrappers. Identify the
     // editing surface first; counting all role=dialog nodes rejects that surface.
@@ -493,13 +550,34 @@
     const targetLinks = [...target.querySelectorAll('a[href]')].map(a => a.getAttribute('href'));
     return { kind: "public-reply", messages: [{ role: "them", text: text.trim() }], editor, target, dialog, textNode: texts[0], targetLinks };
   }
-  function contextKey(context) { return JSON.stringify({ kind: context.kind, messages: context.messages, targetLinks: context.targetLinks }); }
+  function contextKey(context) {
+    return JSON.stringify({ kind: context.kind, messages: context.messages, targetLinks: context.targetLinks });
+  }
   function sourceIsCurrent(expectedDraft = source?.draft) {
     if (!source || source.url !== location.href) return false;
-    try { const context = readContext(); return source.key === contextKey(context) && source.editor === context.editor && source.target === context.target && source.dialog === context.dialog && source.textNode === context.textNode && expectedDraft === editorText(context.editor); }
-    catch { return false; } // Caller reports stale/invalid context and stops all filling.
+    try {
+      const context = readContext();
+      return source.key === contextKey(context)
+        && source.editor === context.editor
+        && source.target === context.target
+        && source.dialog === context.dialog
+        && source.textNode === context.textNode
+        && expectedDraft === editorText(context.editor);
+    } catch {
+      return false;
+    } // Caller reports stale/invalid context and stops all filling.
   }
-  function invalidate(message, error = true) { generation++; clearTimeout(pendingFill?.timer); pendingFill = null; clearPendingLike(true); source = null; autoLikeAfterReply = false; autoLikeSettingResolved = false; state = { candidates: [], decision: null, mode: "" }; setGenerating(false); renderCandidates(); setStatus(message, error); }
+  function invalidate(message, error = true) {
+    generation++;
+    clearTimeout(pendingFill?.timer);
+    pendingFill = null;
+    autoLike.cancel(true);
+    source = null;
+    state = { candidates: [], decision: null, mode: "" };
+    setGenerating(false);
+    renderPanel();
+    setStatus(message, error);
+  }
 
   function setGenerating(busy) {
     ui.generating = busy;
@@ -551,8 +629,8 @@
         // immediately after a successful send. Preserve the one-shot like
         // confirmation across that expected transition; the target is still
         // checked by node identity or its captured status ID before clicking.
-        if (pendingLike) {
-          pendingLike.source.url = location.href;
+        if (autoLike.isPending()) {
+          autoLike.handleRouteChange();
         } else {
           invalidate(hadWork ? "页面已切换，旧回复已停止。请点击下方按钮重新生成。" : READY_TEXT, hadWork);
         }
