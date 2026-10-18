@@ -224,10 +224,13 @@
       log("send-click-captured", { settingResolved, enabled });
       const likeSource = resolveLikeSource(button);
       if (!likeSource) return;
+      const targetLinks = likeSource.targetLinks || [];
       log("source-resolved", {
         sourceOwned: likeSource.owned === true,
         targetAttached: !!likeSource.target?.isConnected,
-        targetLinkCount: (likeSource.targetLinks || []).length
+        targetLinkCount: targetLinks.length,
+        statusLinkCount: targetLinks.filter((href) => !!statusIdFromHref(href)).length,
+        canonicalStatusLinkCount: targetLinks.filter((href) => !!canonicalStatusUrl(href)).length
       });
       if (settingResolved) return startIfEnabled(likeSource);
 
