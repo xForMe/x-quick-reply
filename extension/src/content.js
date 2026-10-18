@@ -558,8 +558,12 @@
         const range = document.createRange();
         range.selectNodeContents(editor);
         selection.removeAllRanges(); selection.addRange(range);
-        // Synchronize the controlled editor's selection before replacing text.
+        // Let controlled editors observe the selection, then restore the full
+        // range immediately before paste. Some editors collapse their caret
+        // while handling selectionchange, which would turn replacement into
+        // append if that collapsed range were used.
         document.dispatchEvent(new Event("selectionchange", { bubbles: true }));
+        selection.removeAllRanges(); selection.addRange(range);
         if (!sourceIsCurrent()) throw new Error("选择输入区域时目标或草稿发生变化");
         const clipboard = new DataTransfer();
         clipboard.setData("text/plain", selected.text);
