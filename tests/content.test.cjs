@@ -38,6 +38,13 @@ function app({html = `<div role="dialog">${post('123', '一起讨论这个想法
     range.deleteContents();
     range.insertNode(w.document.createTextNode(event.clipboardData.getData('text/plain')));
   });
+  w.document.addEventListener('keydown', event => {
+    if (!event.target.matches('[contenteditable="true"]') || event.key !== 'Backspace') return;
+    event.preventDefault();
+    const selection=w.getSelection();
+    if (!selection.rangeCount) return;
+    selection.getRangeAt(0).deleteContents();
+  });
   w.document.execCommand = () => { throw Error('Unexpected native DOM insertion'); };
   const htmlDescriptor = Object.getOwnPropertyDescriptor(w.Element.prototype,'innerHTML');
   if (trustedTypes) {
@@ -258,6 +265,29 @@ test('after auto-fill another candidate replaces the unchanged plugin draft',asy
     assert.equal(a.w.document.querySelector('[role="textbox"]').textContent,'可以具体说说你的想法吗？',a.status());
     assert.match(a.status(),/已回填/);
     assert.equal(a.calls.length,1);
+  }finally{a.close();}
+});
+
+test('replacement clears an existing draft before the paste event',async()=>{
+  const a=app();
+  try{
+    const textbox=a.w.document.querySelector('[role="textbox"]');
+    const events=[];
+    a.w.document.addEventListener('keydown',event=>{
+      if(event.target===textbox && event.key==='Backspace') events.push(`clear:${textbox.textContent}`);
+    },true);
+    a.w.document.addEventListener('paste',event=>{
+      if(event.target===textbox) events.push(`paste:${textbox.textContent}`);
+    },true);
+    await a.generate();
+    a.w.document.querySelector('[data-action="fill"]').click();
+    await new Promise(resolve=>setTimeout(resolve,180));
+    a.w.document.querySelector('[data-candidate="c2"]').click();
+    a.w.document.querySelector('[data-action="fill"]').click();
+    await new Promise(resolve=>setTimeout(resolve,180));
+    assert.deepEqual(events,['clear:','paste:','clear:你最想先讨论哪一部分？','paste:']);
+    assert.equal(textbox.textContent,'可以具体说说你的想法吗？',a.status());
+    assert.match(a.status(),/已回填/);
   }finally{a.close();}
 });
 
