@@ -49,6 +49,7 @@
   };
   document.addEventListener("input", onInput, true);
   const onDocumentClick = (event) => {
+    autoLike.captureReplyLaunch(event.target);
     autoLike.handleSendClick(event.target);
   };
   document.addEventListener("click", onDocumentClick, true);
@@ -161,7 +162,7 @@
     renderPanel();
     let response;
     try {
-      const context = readContext();
+      const context = autoLike.enrichContext(readContext());
       if (editorText(context.editor).trim()) throw new Error("输入框已有草稿，请处理草稿后重新生成");
       source = { url: location.href, kind: context.kind, key: contextKey(context), editor: context.editor,
         target: context.target, dialog: context.dialog, textNode: context.textNode, targetLinks: context.targetLinks,
@@ -196,9 +197,10 @@
     let enabled = false;
     let settingResolved = false;
     let operation = null;
+    let replyLaunch = null;
 
     function log(stage, details = {}) {
-      // 日志只包含流程状态和 DOM 语义，不输出正文、草稿、URL 或 status ID。
+      // 调试日志按用户授权输出原始链接，其他业务数据仍不写入日志。
       console.info("[x-quick-reply][auto-like]", stage, details);
     }
 
@@ -206,12 +208,30 @@
       configure,
       isEnabled: () => enabled,
       isPending: () => !!operation,
+      captureReplyLaunch,
+      enrichContext,
       handleSendClick,
       restore,
       handleRouteChange,
       cancel: (removeMarker = false) => clearOperation(removeMarker),
       dispose: () => clearOperation()
     };
+
+    function captureReplyLaunch(node) {
+      const replyButton = node instanceof Element ? node.closest('[data-testid="reply"]') : null;
+      const tweet = replyButton?.closest('[data-testid="tweet"]');
+      if (!tweet) return;
+      const statusUrl = [...tweet.querySelectorAll('a[href]')].map((anchor) => anchor.getAttribute("href"))
+        .map(canonicalStatusUrl).find(Boolean);
+      if (!statusUrl) return;
+      replyLaunch = { statusUrl, capturedAt: Date.now() };
+      log("reply-launch-captured", { statusUrl });
+    }
+
+    function enrichContext(context) {
+      if (context.kind !== "public-reply" || !replyLaunch?.statusUrl) return context;
+      return { ...context, targetLinks: [...new Set([...(context.targetLinks || []), replyLaunch.statusUrl])] };
+    }
 
     function configure(value) {
       enabled = value === true;
@@ -261,8 +281,9 @@
       try {
         const context = readContext();
         if (context.kind !== "public-reply" || !context.dialog?.contains(button)) return null;
-        return { url: location.href, kind: context.kind, editor: context.editor, target: context.target,
-          dialog: context.dialog, targetLinks: context.targetLinks };
+        const enriched = enrichContext(context);
+        return { url: location.href, kind: enriched.kind, editor: enriched.editor, target: enriched.target,
+          dialog: enriched.dialog, targetLinks: enriched.targetLinks };
       } catch {
         return null;
       }
@@ -612,7 +633,7 @@
   function sourceIsCurrent(expectedDraft = source?.draft) {
     if (!source || source.url !== location.href) return false;
     try {
-      const context = readContext();
+      const context = autoLike.enrichContext(readContext());
       return source.key === contextKey(context)
         && source.editor === context.editor
         && source.target === context.target
