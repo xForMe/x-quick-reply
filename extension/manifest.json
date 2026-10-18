@@ -10,7 +10,7 @@
   "action": {"default_title": "X 快速回复", "default_popup": "src/popup.html"},
   "content_scripts": [{
     "matches": ["https://x.com/*", "https://twitter.com/*"],
-    "js": ["src/content.js"],
+    "js": ["src/vendor/react.production.min.js", "src/vendor/react-dom.production.min.js", "src/content.js"],
     "css": ["src/content.css"],
     "run_at": "document_idle"
   }]

@@ -5,7 +5,11 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { JSDOM } = require('jsdom');
 const { installClipboard } = require('./clipboard-fixture.cjs');
-const source = fs.readFileSync(path.join(__dirname, '../extension/src/content.js'), 'utf8');
+const reactRuntime = [
+  fs.readFileSync(path.join(__dirname, '../extension/src/vendor/react.production.min.js'), 'utf8'),
+  fs.readFileSync(path.join(__dirname, '../extension/src/vendor/react-dom.production.min.js'), 'utf8')
+].join('\n');
+const source = `${reactRuntime}\n${fs.readFileSync(path.join(__dirname, '../extension/src/content.js'), 'utf8')}`;
 const post = (id, text) => `<article data-testid="tweet"><a href="/someone/status/${id}"><time>now</time></a><div data-testid="tweetText">${text}</div></article>`;
 const editor = '<div data-testid="tweetTextarea_0" role="textbox" contenteditable="true"></div>';
 function app({html = `<div role="dialog">${post('123', '一起讨论这个想法？')}${editor}<button data-testid="tweetButton">Reply</button></div>`, url = 'https://x.com/compose/post', response, trustedTypes = false, pasteHandler, pendingLikeMarker, pendingLikeRaw} = {}) {

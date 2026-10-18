@@ -52,13 +52,13 @@ flowchart LR
 
 | 组件 | 技术与用途 |
 | --- | --- |
-| 浏览器插件 | Chrome Manifest V3、原生 JavaScript、HTML、CSS |
+| 浏览器插件 | Chrome Manifest V3、React 17 UI、原生 DOM 集成、HTML、CSS |
 | 本地网关 | Python 3.10+，仅使用标准库，监听 `127.0.0.1` |
 | 回复生成 | 可配置的 OpenAI 兼容聊天接口 |
 | 回复决策 | 阿里云百炼 `decision-model-preview` |
 | 自动化测试 | Node.js 测试运行器、jsdom、React、Draft.js、Python unittest |
 
-插件与网关运行无需 Node.js、数据库或前端构建。Node.js 仅用于开发测试。
+插件与网关运行无需 Node.js、数据库或前端构建；React 运行时随扩展以本地文件提供。Node.js 仅用于开发测试。
 
 ## 快速开始
 
@@ -243,7 +243,7 @@ https://<业务空间ID>.<地域>.maas.aliyuncs.com/compatible-mode/v1/systemone
 x-quick-reply/
 ├── extension/                 # Chrome 插件，加载此目录
 │   ├── manifest.json          # 插件声明与权限
-│   └── src/                   # 页面脚本、后台、面板与设置页
+│   └── src/                   # React 面板、页面脚本、后台、设置页与本地运行时
 ├── gateway.py                 # 本地模型网关
 ├── prompts/
 │   └── reply-policy.md        # 生成与决策共用的回复规则

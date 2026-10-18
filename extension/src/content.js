@@ -8,6 +8,7 @@
   const PENDING_LIKE_MAX_AGE = 30000;
   const DEBUG_LIKE_BREAKPOINTS = true;
   try {
+  if (!globalThis.React || !globalThis.ReactDOM) throw new Error("React runtime 未加载，无法初始化快速回复面板");
   const PANEL_ID = "quick-reply-panel";
   const previous = globalThis[RUNTIME_KEY];
   if (previous) {
@@ -24,28 +25,17 @@
   let autoLikeAfterReply = false;
   let autoLikeSettingResolved = false;
   let pendingLike = null;
+  let panelMount = null;
+  let panel = null;
+  let ui = { status: READY_TEXT, statusError: false, generating: false, routeHidden: false };
 
   // A DOM node is not evidence that this extension context has a live listener.
   document.getElementById(PANEL_ID)?.remove();
-  const panel = document.createElement("aside");
-  panel.id = PANEL_ID;
-  const header = element("div", "qr-header");
-  const close = actionButton("close", "×");
-  close.title = "关闭";
-  header.append(element("strong", "", `快速回复 · ${VERSION}`), close);
-  const status = element("div", "qr-status", READY_TEXT);
-  status.dataset.role = "status";
-  status.setAttribute("role", "status");
-  const candidates = element("div", "qr-candidates");
-  candidates.dataset.role = "candidates";
-  const fill = actionButton("fill", "回填输入框", "qr-fill");
-  fill.disabled = true;
-  fill.hidden = true;
-  const diagnostics = actionButton("diagnostics", "复制排查信息", "qr-diagnostics");
-  diagnostics.hidden = true;
-  panel.append(header, status, actionButton("generate", "生成并填入回复", "qr-primary"), candidates, fill, diagnostics);
-  document.body.appendChild(panel);
-  panel.addEventListener("click", onClick);
+  document.getElementById(`${PANEL_ID}-mount`)?.remove();
+  panelMount = document.createElement("div");
+  panelMount.id = "quick-reply-panel-mount";
+  document.body.appendChild(panelMount);
+  renderPanel();
   const onInput = (event) => {
     if (inserting || !source?.editor.contains(event.target)) return;
     // Sending a reply can clear the controlled editor and emit an input event;
@@ -70,7 +60,10 @@
       autoLikeSettingResolved,
       autoLikeAfterReply
     });
+
     if (pendingLike || !isReplyRoute()) return;
+    console.log("回复已完成");
+    debugger;
     if (!button || button.disabled || button.getAttribute("aria-disabled") === "true") return;
     let likeSource = source?.owned && source.kind === "public-reply" ? source : null;
     if (!likeSource) {
@@ -115,7 +108,8 @@
   const onMessage = (message, _sender, sendResponse) => {
     if (message?.type !== "OPEN_QUICK_REPLY") return;
     dismissed = false;
-    panel.hidden = false;
+    ui.routeHidden = false;
+    renderPanel();
     try { readContext(); setStatus(`已识别当前回复目标。${READY_TEXT}`); sendResponse({ ok: true, version: VERSION }); }
     catch (error) { setStatus(error.message, true); sendResponse({ ok: false, error: error.message }); }
   };
@@ -127,37 +121,77 @@
     pendingFill = null;
     clearInterval(timer);
     clearPendingLike();
-    panel.removeEventListener("click", onClick);
     document.removeEventListener("input", onInput, true);
     document.removeEventListener("click", onDocumentClick, true);
-    panel.remove();
+    ReactDOM.unmountComponentAtNode(panelMount);
+    panelMount.remove();
   } };
   restorePendingLike();
 
-  function element(tag, className = "", text = "") {
-    const node = document.createElement(tag);
-    node.className = className;
-    node.textContent = text;
-    return node;
-  }
-  function actionButton(action, text, className = "") {
-    const node = element("button", className, text);
-    node.type = "button";
-    node.dataset.action = action;
-    return node;
+  function renderPanel() {
+    if (!panelMount) return;
+    // React 只负责插件自己的面板；X 的帖子和编辑器仍由下方业务逻辑直接读取。
+    ReactDOM.render(React.createElement(QuickReplyPanel, {
+      version: VERSION,
+      status: ui.status,
+      statusError: ui.statusError,
+      generating: ui.generating,
+      hidden: dismissed || ui.routeHidden,
+      candidates: state.candidates,
+      selectedId: state.selectedId,
+      decision: state.decision,
+      pendingFill: !!pendingFill,
+      onAction: handlePanelAction,
+      onCandidateSelect: selectCandidate
+    }), panelMount);
+    panel = panelMount.querySelector(`#${PANEL_ID}`);
   }
 
-  function onClick(event) {
-    const action = event.target.closest("[data-action]")?.dataset.action;
-    if (action === "close") { dismissed = true; panel.hidden = true; invalidate("面板已关闭，旧请求已取消"); }
+  function handlePanelAction(action) {
+    if (action === "close") { dismissed = true; invalidate("面板已关闭，旧请求已取消"); }
     if (action === "generate") generate();
     if (action === "fill") fillSelected();
     if (action === "diagnostics") copyDiagnostics();
-    if (event.target.closest("[data-candidate]")) {
-      if (state.decision?.reviewRequired || pendingFill) return;
-      state.selectedId = event.target.closest("[data-candidate]").dataset.candidate;
-      renderCandidates();
-    }
+  }
+
+  function selectCandidate(candidateId) {
+    if (state.decision?.reviewRequired || pendingFill) return;
+    state.selectedId = candidateId;
+    renderCandidates();
+  }
+
+  function QuickReplyPanel(props) {
+    const h = React.createElement;
+    const reviewRequired = props.decision?.reviewRequired === true;
+    const fillHidden = !props.selectedId || reviewRequired;
+    const fillDisabled = !props.selectedId || reviewRequired || props.pendingFill;
+    const candidateNodes = props.candidates.map(candidate => h(
+      "button",
+      { key: candidate.id, type: "button", className: `qr-candidate ${candidate.id === props.selectedId ? "selected" : ""}`,
+        "data-candidate": candidate.id, disabled: reviewRequired || props.pendingFill,
+        onClick: () => props.onCandidateSelect(candidate.id) },
+      h("span", null, candidate.text),
+      candidate.id === props.decision?.selectedId ? h("em", null, "百炼选中") : null
+    ));
+    if (props.decision) candidateNodes.push(h(
+      "div",
+      { key: "reason", className: "qr-reason" },
+      `选择置信度：${(props.decision.confidence * 100).toFixed(1)}%（不代表回复正确率）`
+    ));
+    return h("aside", { id: PANEL_ID, hidden: props.hidden, "aria-busy": String(props.generating || props.pendingFill) },
+      h("div", { className: "qr-header" },
+        h("strong", null, `快速回复 · ${props.version}`),
+        h("button", { type: "button", title: "关闭", "data-action": "close", onClick: () => props.onAction("close") }, "×")
+      ),
+      h("div", { className: `qr-status${props.statusError ? " error" : ""}`, "data-role": "status", role: "status" }, props.status),
+      h("button", { type: "button", className: "qr-primary", "data-action": "generate", disabled: props.generating || props.pendingFill,
+        onClick: () => props.onAction("generate") }, props.generating ? "生成中，请稍候…" : "生成并填入回复"),
+      h("div", { className: "qr-candidates", "data-role": "candidates" }, candidateNodes),
+      h("button", { type: "button", className: "qr-fill", "data-action": "fill", hidden: fillHidden, disabled: fillDisabled,
+        onClick: () => props.onAction("fill") }, "回填输入框"),
+      h("button", { type: "button", className: "qr-diagnostics", "data-action": "diagnostics", hidden: !props.statusError,
+        onClick: () => props.onAction("diagnostics") }, "复制排查信息")
+    );
   }
 
   async function generate() {
@@ -256,20 +290,7 @@
   }
 
   function renderCandidates() {
-    const container = panel.querySelector('[data-role="candidates"]');
-    const selectedId = state.selectedId;
-    container.replaceChildren(...state.candidates.map((candidate) => {
-      const button = element("button", `qr-candidate ${candidate.id === selectedId ? "selected" : ""}`);
-      button.type = "button";
-      button.dataset.candidate = candidate.id;
-      button.disabled = state.decision?.reviewRequired === true || !!pendingFill;
-      button.append(element("span", "", candidate.text));
-      if (candidate.id === state.decision?.selectedId) button.append(element("em", "", "百炼选中"));
-      return button;
-    }));
-    if (state.decision) container.append(element("div", "qr-reason", `选择置信度：${(state.decision.confidence * 100).toFixed(1)}%（不代表回复正确率）`));
-    panel.querySelector('[data-action="fill"]').disabled = !selectedId || state.decision?.reviewRequired || !!pendingFill;
-    panel.querySelector('[data-action="fill"]').hidden = !selectedId || state.decision?.reviewRequired === true;
+    renderPanel();
   }
 
   function fillSelected() {
@@ -529,13 +550,15 @@
   function invalidate(message, error = true) { generation++; clearTimeout(pendingFill?.timer); pendingFill = null; clearPendingLike(true); source = null; autoLikeAfterReply = false; autoLikeSettingResolved = false; state = { candidates: [], decision: null, mode: "" }; setGenerating(false); renderCandidates(); setStatus(message, error); }
 
   function setGenerating(busy) {
-    const button = panel.querySelector('[data-action="generate"]');
-    button.disabled = busy || !!pendingFill;
-    button.textContent = busy ? "生成中，请稍候…" : "生成并填入回复";
-    panel.setAttribute("aria-busy", String(busy || !!pendingFill));
+    ui.generating = busy;
+    renderPanel();
   }
 
-  function setStatus(text, error = false) { const element = panel.querySelector('[data-role="status"]'); element.textContent = text; element.classList.toggle("error", error); diagnostics.hidden = !error; }
+  function setStatus(text, error = false) {
+    ui.status = text;
+    ui.statusError = error;
+    renderPanel();
+  }
 
   async function copyDiagnostics() {
     // Structural metadata only: no text, HTML, status IDs, URLs, draft or credentials.
@@ -582,7 +605,8 @@
           invalidate(hadWork ? "页面已切换，旧回复已停止。请点击下方按钮重新生成。" : READY_TEXT, hadWork);
         }
       }
-      panel.hidden = dismissed || !(isConversation() || (isReplyRoute() && [...document.querySelectorAll('[role="dialog"]')].some(visible)));
+      ui.routeHidden = !(isConversation() || (isReplyRoute() && [...document.querySelectorAll('[role="dialog"]')].some(visible)));
+      renderPanel();
     };
     sync();
     return setInterval(sync, 500);
