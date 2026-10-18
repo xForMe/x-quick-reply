@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "X 快速回复（预览）",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "读取当前 X 帖子回复弹窗或私信会话，生成并选择回复后回填草稿，可在发送后自动点赞。",
   "permissions": ["storage", "scripting"],
   "host_permissions": ["https://x.com/*", "https://twitter.com/*", "http://127.0.0.1/*", "http://localhost/*"],

@@ -20,7 +20,7 @@
         const results = await chrome.scripting.executeScript({ target: { tabId: tab.id, frameIds: [0] }, files: ["src/vendor/react.production.min.js", "src/vendor/react-dom.production.min.js", "src/content.js"], world: "ISOLATED" });
         const boot = results.find(result => result.frameId === 0)?.result;
         if (!boot?.ok) throw new Error(boot?.error || "页面脚本未返回初始化结果");
-        if (boot.version !== "0.4.0") throw new Error(`页面脚本版本不符：${boot.version}`);
+        if (boot.version !== "0.4.1") throw new Error(`页面脚本版本不符：${boot.version}`);
         stage = "加载面板样式";
         await chrome.scripting.insertCSS({ target: { tabId: tab.id, frameIds: [0] }, files: ["src/content.css"] });
         stage = "连接页面脚本";
@@ -38,7 +38,7 @@
     }
 
     return h("main", null,
-      h("strong", null, "X 快速回复 · 0.4.0"),
+      h("strong", null, "X 快速回复 · 0.4.1"),
       h("p", null, "先点击帖子的回复按钮，打开回复弹窗；也可打开具体私信会话。"),
       h("button", { id: "open", type: "button", disabled: busy, onClick: openPanel }, busy ? "打开中…" : "打开快速回复面板"),
       h("button", { id: "settings", type: "button", onClick: () => chrome.runtime.openOptionsPage() }, "扩展设置"),
