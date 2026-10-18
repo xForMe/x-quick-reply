@@ -261,6 +261,29 @@ test('after auto-fill another candidate replaces the unchanged plugin draft',asy
   }finally{a.close();}
 });
 
+test('replacement remains exact when the editor collapses selection on selectionchange',async()=>{
+  const a=app({pasteHandler:(event,w)=>{
+    event.preventDefault();
+    const selection=w.getSelection();
+    const range=selection.getRangeAt(0);
+    range.deleteContents();
+    range.insertNode(w.document.createTextNode(event.clipboardData.getData('text/plain')));
+  }});
+  try{
+    const textbox=a.w.document.querySelector('[role="textbox"]');
+    a.w.document.addEventListener('selectionchange',()=>{
+      const selection=a.w.getSelection();
+      selection.collapse(textbox,textbox.childNodes.length);
+    });
+    await a.generate();
+    a.w.document.querySelector('[data-candidate="c2"]').click();
+    a.w.document.querySelector('[data-action="fill"]').click();
+    await new Promise(resolve=>setTimeout(resolve,180));
+    assert.equal(textbox.textContent,'可以具体说说你的想法吗？',a.status());
+    assert.match(a.status(),/已回填/);
+  }finally{a.close();}
+});
+
 test('repeated fill of the same candidate is a no-op without an error',async()=>{
   const a=app();
   try{
