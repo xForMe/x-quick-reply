@@ -305,14 +305,14 @@
 
   function isLiked(button) {
     return button?.getAttribute("data-testid") === "unlike" || button?.getAttribute("aria-pressed") === "true"
-      || /^(Unlike|取消喜欢|已喜欢)(?:\s*\(?[\d,.]+\)?)?$/i.test(button?.getAttribute("aria-label") || "");
+      || /(?:^|[.。]\s*)(Unlike|取消喜欢|已喜欢)\s*$/i.test(button?.getAttribute("aria-label") || "");
   }
 
   function isLikeControl(button) {
     const testId = button?.getAttribute("data-testid") || "";
     const label = (button?.getAttribute("aria-label") || "").trim();
     return /^(?:un)?like(?:button)?$/i.test(testId)
-      || /^(?:Like|Unlike|喜欢|已喜欢|取消喜欢)(?:\s*\(?[\d,.]+\)?)?$/i.test(label);
+      || /(?:^|[.。]\s*)(?:Like|Unlike|喜欢|已喜欢|取消喜欢)\s*$/i.test(label);
   }
 
   function findSendButton(node) {

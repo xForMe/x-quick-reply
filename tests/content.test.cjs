@@ -113,8 +113,8 @@ test('auto-like relocates the target when X rewrites the status link and uses a 
   try {
     const original=a.w.document.querySelector('[data-testid="tweet"]');
     const editorNode=a.w.document.querySelector('[role="textbox"]');
-    const like=a.w.document.createElement('button'); like.setAttribute('aria-label','Like (12)');
-    like.onclick=()=>{like.setAttribute('aria-label','Unlike (13)');};
+    const like=a.w.document.createElement('button'); like.setAttribute('aria-label','43 Likes. Like');
+    like.onclick=()=>{like.setAttribute('aria-label','44 Likes. Unlike');};
     original.append(like);
     await a.generate();
     a.w.document.querySelector('[data-testid="tweetButtonInline"]').onclick=()=>{
@@ -122,14 +122,14 @@ test('auto-like relocates the target when X rewrites the status link and uses a 
       original.remove();
       const replacement=a.w.document.createElement('article'); replacement.dataset.testid='tweet';
       replacement.innerHTML='<a href="https://x.com/someone/status/123?ref=timeline"></a>';
-      const replacementLike=a.w.document.createElement('button'); replacementLike.setAttribute('aria-label','Like (12)');
-      replacementLike.onclick=()=>replacementLike.setAttribute('aria-label','Unlike (13)');
+      const replacementLike=a.w.document.createElement('button'); replacementLike.setAttribute('aria-label','43 Likes. Like');
+      replacementLike.onclick=()=>replacementLike.setAttribute('aria-label','44 Likes. Unlike');
       replacement.append(replacementLike); a.w.document.body.append(replacement);
     };
     a.w.document.querySelector('[data-testid="tweetButtonInline"]').click();
     a.tick();
     const replacement=a.w.document.querySelector('[data-testid="tweet"]');
-    assert.equal(replacement.querySelector('[aria-label^="Unlike"]').getAttribute('aria-label'),'Unlike (13)',a.status());
+    assert.equal(replacement.querySelector('[aria-label$="Unlike"]').getAttribute('aria-label'),'44 Likes. Unlike',a.status());
     assert.match(a.status(),/已自动点赞/);
   } finally {a.close();}
 });
