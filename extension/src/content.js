@@ -1,5 +1,5 @@
 (() => {
-  const VERSION = "0.4.1";
+  const VERSION = "0.4.2";
   const INVALID_CONTEXT_TEXT = "插件连接已失效。请刷新 X 页面，再重新打开回复弹窗并生成。";
   function isInvalidContext(error) { return /^Extension context invalidated\.?$/i.test(error?.message || ""); }
   const READY_TEXT = "点击下方按钮，生成回复并填入输入框。";
@@ -570,6 +570,11 @@
         // event. Recreate the range from the current editor instead of
         // reusing boundary points that may refer to detached nodes.
         selectCurrentEditorContents();
+        // The first event can also leave the editor's internal selection at
+        // the caret position. Notify the controlled editor again after the
+        // full range has been restored so its paste handler uses replacement
+        // selection rather than appending at the end.
+        document.dispatchEvent(new Event("selectionchange", { bubbles: true }));
         if (!sourceIsCurrent()) throw new Error("选择输入区域时目标或草稿发生变化");
         const clipboard = new DataTransfer();
         clipboard.setData("text/plain", selected.text);

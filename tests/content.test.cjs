@@ -271,7 +271,10 @@ test('replacement remains exact when the editor collapses selection on selection
   }});
   try{
     const textbox=a.w.document.querySelector('[role="textbox"]');
+    let collapsed=false;
     a.w.document.addEventListener('selectionchange',()=>{
+      if(collapsed) return;
+      collapsed=true;
       const selection=a.w.getSelection();
       selection.collapse(textbox,textbox.childNodes.length);
     });
@@ -294,7 +297,10 @@ test('replacement selects current nodes when selectionchange rebuilds the editor
   }});
   try{
     const textbox=a.w.document.querySelector('[role="textbox"]');
+    let rebuilt=false;
     a.w.document.addEventListener('selectionchange',()=>{
+      if(rebuilt) return;
+      rebuilt=true;
       const text=textbox.textContent;
       textbox.replaceChildren(a.w.document.createTextNode(text));
     });
@@ -303,6 +309,30 @@ test('replacement selects current nodes when selectionchange rebuilds the editor
     a.w.document.querySelector('[data-action="fill"]').click();
     await new Promise(resolve=>setTimeout(resolve,180));
     assert.equal(textbox.textContent,'可以具体说说你的想法吗？',a.status());
+    assert.match(a.status(),/已回填/);
+  }finally{a.close();}
+});
+
+test('replacement resynchronizes the controlled editor internal selection',async()=>{
+  let textbox;
+  let internalSelection='full';
+  let firstSelectionChange=true;
+  const a=app({pasteHandler:(event,w)=>{
+    event.preventDefault();
+    const selection=w.getSelection();
+    if(internalSelection==='end') selection.collapse(textbox,textbox.childNodes.length);
+    const range=selection.getRangeAt(0);
+    range.deleteContents();
+    range.insertNode(w.document.createTextNode(event.clipboardData.getData('text/plain')));
+  }});
+  try{
+    textbox=a.w.document.querySelector('[role="textbox"]');
+    a.w.document.addEventListener('selectionchange',()=>{
+      internalSelection=firstSelectionChange?'end':'full';
+      firstSelectionChange=false;
+    });
+    await a.generate();
+    assert.equal(textbox.textContent,'你最想先讨论哪一部分？',a.status());
     assert.match(a.status(),/已回填/);
   }finally{a.close();}
 });
