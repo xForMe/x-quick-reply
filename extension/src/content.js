@@ -596,10 +596,14 @@
     if (texts.length !== 1) throw new Error("读取失败：目标帖子必须有唯一的可见正文；不支持纯图片或多正文帖子");
     const text = texts[0].innerText || texts[0].textContent || "";
     if (!text.trim() || text.length > 800) throw new Error("读取失败：目标帖子正文为空或超过 800 字符，未截取部分内容");
-    // X reply previews can expose text without a status link. Bind to the
-    // validated live modal/target/editor instead of requiring an unavailable ID.
-    // Links are snapshot metadata only, never an alternate source of post text.
-    const targetLinks = [...target.querySelectorAll('a[href]')].map(a => a.getAttribute('href'));
+    // X reply previews can render the timestamp/status link outside the tweet
+    // wrapper. The dialog has already been validated to contain exactly one
+    // target tweet, so collect status links from that same dialog without using
+    // the author profile link as a substitute.
+    const targetLinks = [...new Set([
+      ...target.querySelectorAll('a[href]'),
+      ...dialog.querySelectorAll('a[href*="/status/"]')
+    ])].map(a => a.getAttribute('href'));
     return { kind: "public-reply", messages: [{ role: "them", text: text.trim() }], editor, target, dialog, textNode: texts[0], targetLinks };
   }
   function contextKey(context) {

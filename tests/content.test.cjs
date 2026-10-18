@@ -142,6 +142,21 @@ test('auto-like relocates the target and ignores the count in the aria label', a
   } finally {a.close();}
 });
 
+test('auto-like reads a status link rendered beside the tweet wrapper', async () => {
+  const a=app({response:()=>({ok:true,autoLikeAfterReply:true,candidates:[{id:'c1',text:'先聊这个。'}],decision:{selectedId:'c1',reviewRequired:false,confidence:0.8}}),html:`<div role="dialog"><article data-testid="tweet"><a href="/z2810358647">作者</a><div data-testid="tweetText">目标帖子</div><button data-testid="like" aria-label="Like"></button></article><a href="/someone/status/123"><time>now</time></a>${editor}<button data-testid="tweetButton">Reply</button></div>`});
+  try {
+    const like=a.w.document.querySelector('[data-testid="like"]');
+    like.onclick=()=>{like.dataset.testid='unlike';like.setAttribute('aria-label','Liked');};
+    await a.generate();
+    const editorNode=a.w.document.querySelector('[role="textbox"]');
+    a.w.document.querySelector('[data-testid="tweetButton"]').onclick=()=>{editorNode.textContent='';};
+    a.w.document.querySelector('[data-testid="tweetButton"]').click();
+    a.tick();
+    assert.equal(like.dataset.testid,'unlike',a.status());
+    assert.match(a.status(),/已自动点赞/);
+  } finally {a.close();}
+});
+
 test('auto-like survives the route change caused by closing the reply modal', async () => {
   const a=app({response:()=>({ok:true,autoLikeAfterReply:true,candidates:[{id:'c1',text:'先聊这个。'}],decision:{selectedId:'c1',reviewRequired:false,confidence:0.8}})});
   try {
