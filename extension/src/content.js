@@ -230,7 +230,9 @@
         targetAttached: !!likeSource.target?.isConnected,
         targetLinkCount: targetLinks.length,
         statusLinkCount: targetLinks.filter((href) => !!statusIdFromHref(href)).length,
-        canonicalStatusLinkCount: targetLinks.filter((href) => !!canonicalStatusUrl(href)).length
+        canonicalStatusLinkCount: targetLinks.filter((href) => !!canonicalStatusUrl(href)).length,
+        targetLinkHrefs: targetLinks,
+        canonicalStatusLinks: targetLinks.map(canonicalStatusUrl).filter(Boolean)
       });
       if (settingResolved) return startIfEnabled(likeSource);
 
