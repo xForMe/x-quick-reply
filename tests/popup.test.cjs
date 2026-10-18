@@ -9,7 +9,7 @@ const reactRuntime=[
   fs.readFileSync(path.join(__dirname,'../extension/src/vendor/react-dom.production.min.js'),'utf8')
 ].join('\n');
 const source=fs.readFileSync(path.join(__dirname,'../extension/src/popup.js'),'utf8');
-async function clickOpen({scriptError, messageError, response={ok:true}, bootstrapResult={ok:true,version:'0.4.0'}}={}) {
+async function clickOpen({scriptError, messageError, response={ok:true}, bootstrapResult={ok:true,version:'0.4.1'}}={}) {
   const dom=new JSDOM('<div id="app"></div>',{runScripts:'outside-only'});
   const w=dom.window, calls=[];
   let injected=false, closed=false;

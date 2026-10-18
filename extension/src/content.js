@@ -1,5 +1,5 @@
 (() => {
-  const VERSION = "0.4.0";
+  const VERSION = "0.4.1";
   const INVALID_CONTEXT_TEXT = "插件连接已失效。请刷新 X 页面，再重新打开回复弹窗并生成。";
   function isInvalidContext(error) { return /^Extension context invalidated\.?$/i.test(error?.message || ""); }
   const READY_TEXT = "点击下方按钮，生成回复并填入输入框。";
@@ -555,15 +555,21 @@
         editor.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: selected.text }));
       } else {
         const selection = window.getSelection();
-        const range = document.createRange();
-        range.selectNodeContents(editor);
-        selection.removeAllRanges(); selection.addRange(range);
+        const selectCurrentEditorContents = () => {
+          const range = document.createRange();
+          range.selectNodeContents(editor);
+          selection.removeAllRanges(); selection.addRange(range);
+        };
+        selectCurrentEditorContents();
         // Let controlled editors observe the selection, then restore the full
         // range immediately before paste. Some editors collapse their caret
         // while handling selectionchange, which would turn replacement into
         // append if that collapsed range were used.
         document.dispatchEvent(new Event("selectionchange", { bubbles: true }));
-        selection.removeAllRanges(); selection.addRange(range);
+        // The controlled editor may rebuild its text nodes while handling the
+        // event. Recreate the range from the current editor instead of
+        // reusing boundary points that may refer to detached nodes.
+        selectCurrentEditorContents();
         if (!sourceIsCurrent()) throw new Error("选择输入区域时目标或草稿发生变化");
         const clipboard = new DataTransfer();
         clipboard.setData("text/plain", selected.text);
