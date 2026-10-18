@@ -6,7 +6,6 @@
   const RUNTIME_KEY = "__xQuickReplyRuntime";
   const PENDING_LIKE_KEY = "__xQuickReplyPendingLike.v1";
   const PENDING_LIKE_MAX_AGE = 30000;
-  const DEBUG_LIKE_BREAKPOINTS = true;
   try {
   if (!globalThis.React || !globalThis.ReactDOM) throw new Error("React runtime 未加载，无法初始化快速回复面板");
   const PANEL_ID = "quick-reply-panel";
@@ -49,21 +48,7 @@
   document.addEventListener("input", onInput, true);
   const onDocumentClick = (event) => {
     const button = findSendButton(event.target);
-    // 先在所有后续条件之前确认是否捕获到发送按钮点击；否则任一前置条件失败时，
-    // 后面的断点都不会出现，无法区分“没有捕获点击”和“捕获后被条件拦截”。
-    if (button) likeDebugger("send-button-click-captured", {
-      buttonTestId: button.getAttribute("data-testid"),
-      route: location.href,
-      replyRoute: isReplyRoute(),
-      pendingLike: !!pendingLike,
-      sourceUrl: source?.url || null,
-      autoLikeSettingResolved,
-      autoLikeAfterReply
-    });
-
     if (pendingLike || !isReplyRoute()) return;
-    console.log("回复已完成");
-    debugger;
     if (!button || button.disabled || button.getAttribute("aria-disabled") === "true") return;
     let likeSource = source?.owned && source.kind === "public-reply" ? source : null;
     if (!likeSource) {
@@ -72,22 +57,14 @@
         if (context.kind !== "public-reply" || !context.dialog?.contains(button)) return;
         likeSource = { url: location.href, kind: context.kind, editor: context.editor, target: context.target,
           dialog: context.dialog, targetLinks: context.targetLinks };
-      } catch (error) {
-        likeDebugger("send-context-read-failed", { message: error?.message || String(error) });
-        return;
-      }
+      } catch { return; }
     } else if (!likeSource.dialog?.contains(button)) {
-      likeDebugger("send-button-outside-reply-dialog", { buttonTestId: button.getAttribute("data-testid") });
       return;
     }
     // 只有用户实际点击 X 的发送按钮，且当前弹窗仍是最初识别的回复目标，
     // 才允许启动一次点赞任务；生成或回填草稿本身不会触发点赞。
     const start = (enabled) => {
-      if (!enabled) return likeDebugger("auto-like-disabled", { sourceUrl: likeSource.url });
-      if (likeSource.url !== location.href) return likeDebugger("send-button-route-mismatch", {
-        sourceUrl: likeSource.url,
-        currentUrl: location.href
-      });
+      if (!enabled || likeSource.url !== location.href) return;
       startPendingLike(likeSource);
     };
     if (autoLikeSettingResolved) return start(autoLikeAfterReply);
@@ -96,7 +73,6 @@
     if (!storage || typeof storage.get !== "function") {
       return setStatus("读取自动点赞设置失败：chrome.storage.local.get 不可用", true);
     }
-    likeDebugger("read-auto-like-setting", { storageType: typeof storage, getType: typeof storage.get });
     Promise.resolve(storage.get({ autoLikeAfterReply: false })).then((settings) => {
       autoLikeSettingResolved = true;
       if (typeof settings.autoLikeAfterReply !== "boolean") return setStatus("自动点赞开关设置无效，请重新保存扩展设置", true);
@@ -232,7 +208,6 @@
   function startPendingLike(likeSource) {
     if (pendingLike) return;
     // 这是发送后的单次状态机：先确认发送迹象，再定位原帖，最后点击并核验点赞。
-    likeDebugger("send-confirmation-start");
     pendingLike = { source: likeSource, clicked: false, deadline: Date.now() + 5000, timer: null };
     setStatus("已点击发送，正在确认回复并点赞原帖…");
     pendingLike.timer = setInterval(checkReplyAndLike, 100);
@@ -244,7 +219,6 @@
     try {
       const raw = sessionStorage.getItem(PENDING_LIKE_KEY);
       if (!raw) return;
-      likeDebugger("pending-like-restore-start");
       marker = JSON.parse(raw);
     } catch (error) {
       clearPendingLikeMarker();
@@ -368,29 +342,14 @@
     }
     const like = target && findLikeButton(target);
     if (!like) {
-      if (!operation.debugMissingButton) {
-        operation.debugMissingButton = true;
-        likeDebugger("like-button-missing", { targetUrl });
-      }
       if (Date.now() >= operation.deadline) return finishLike(false, "已打开原帖，但未找到点赞按钮；未自动重试");
       return;
     }
     if (isLiked(like)) return finishLike(true, "回复已发送，目标帖子此前已点赞");
     if (!operation.clicked) {
       // 只允许点击一次；点击后必须从 DOM 状态确认已点赞，不能把 click() 本身当成成功。
-      likeDebugger("like-button-before-click", {
-        dataTestId: like.getAttribute("data-testid"),
-        ariaLabel: like.getAttribute("aria-label"),
-        targetUrl
-      });
       operation.clicked = true;
       like.click();
-      likeDebugger("like-button-after-click", {
-        dataTestId: like.getAttribute("data-testid"),
-        ariaLabel: like.getAttribute("aria-label"),
-        liked: isLiked(like),
-        targetUrl
-      });
     }
     if (isLiked(like)) return finishLike(true, "回复已发送，已自动点赞目标帖子");
     if (Date.now() >= operation.deadline) return finishLike(false, "已尝试点赞，但页面未确认成功；未自动重试");
@@ -416,7 +375,6 @@
       // 完整导航会销毁当前 content script，所以先保存脱敏 URL，供原帖页恢复一次任务。
       sessionStorage.setItem(PENDING_LIKE_KEY, JSON.stringify({ schema: "quick-reply.like.v1", url: targetUrl, createdAt: Date.now() }));
       setStatus("回复已发送，正在打开原帖确认点赞…");
-      likeDebugger("navigate-to-original-post", { targetUrl });
       location.assign(targetUrl);
       return true;
     } catch (error) {
@@ -449,12 +407,6 @@
     // Only the trailing state word is semantic; the count and its wording are not.
     const match = String(label || "").trim().match(/(?:^|[.。:：]\s*)(Like|Liked|喜欢|已喜欢|取消喜欢)\s*$/i);
     return match?.[1]?.toLowerCase() || null;
-  }
-
-  function likeDebugger(stage, details = {}) {
-    if (!DEBUG_LIKE_BREAKPOINTS) return;
-    console.debug("[x-quick-reply like breakpoint]", stage, details);
-    debugger;
   }
 
   function findSendButton(node) {
