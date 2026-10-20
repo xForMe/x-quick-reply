@@ -12,7 +12,7 @@ const reactRuntime = [
 const source = `${reactRuntime}\n${fs.readFileSync(path.join(__dirname, '../extension/src/content.js'), 'utf8')}`;
 const post = (id, text) => `<article data-testid="tweet"><a href="/someone/status/${id}"><time>now</time></a><div data-testid="tweetText">${text}</div></article>`;
 const editor = '<div data-testid="tweetTextarea_0" role="textbox" contenteditable="true"></div>';
-function app({html = `<div role="dialog">${post('123', '一起讨论这个想法？')}${editor}<button data-testid="tweetButton">Reply</button></div>`, url = 'https://x.com/compose/post', response, trustedTypes = false, pasteHandler, pendingLikeMarker, pendingLikeRaw} = {}) {
+function app({html = `<div role="dialog">${post('123', '一起讨论这个想法？')}${editor}<button data-testid="tweetButton">Reply</button></div>`, url = 'https://x.com/compose/post', response, trustedTypes = false, pasteHandler, pendingLikeMarker, pendingLikeRaw, oneClickReply = false} = {}) {
   const dom = new JSDOM(`<body>${html}</body>`, {url, runScripts:'outside-only', pretendToBeVisual:true});
   const w = dom.window, calls = [];
   let now = Date.now();
@@ -23,11 +23,12 @@ function app({html = `<div role="dialog">${post('123', '一起讨论这个想法
   w.setInterval = fn => {intervals.push(fn);return intervals.length;};
   w.clearInterval = id => {intervals[id - 1] = null;};
   w.Element.prototype.getClientRects = function () { return this.closest('[hidden]') ? [] : [{}]; };
+  const storage={async get(){return {oneClickReply,autoLikeAfterReply:false};}};
   w.chrome = {runtime:{onMessage:{addListener(fn){messageListener=fn;listenerCount++;},removeListener(fn){if(messageListener===fn) {messageListener=null;listenerCount--;}}}, async sendMessage(message) {
     calls.push(message);
     if (response) return response(message);
     return {ok:true, candidates:[{id:'c1',text:'你最想先讨论哪一部分？'},{id:'c2',text:'可以具体说说你的想法吗？'}], decision:{selectedId:'c1',reviewRequired:false,confidence:0.8}};
-  }}};
+  }},storage:{local:storage}};
   installClipboard(w);
   // Minimal editor substitute. Actual Draft.js integration is tested separately.
   w.document.addEventListener('paste', event => {
@@ -56,7 +57,7 @@ function app({html = `<div role="dialog">${post('123', '一起讨论这个想法
   const boot = w.eval(source);
   return {w, calls, panel:()=>w.document.getElementById('quick-reply-panel'),
     status:()=>w.document.querySelector('[data-role="status"]').textContent,
-    async generate(){w.document.querySelector('[data-action="generate"]').click(); await new Promise(resolve=>setTimeout(resolve,180));},
+    async generate(){await new Promise(resolve=>setTimeout(resolve,0));w.document.querySelector('[data-action="generate"]').click(); await new Promise(resolve=>setTimeout(resolve,180));},
     open(){let result; messageListener({type:'OPEN_QUICK_REPLY'}, {id:'test'}, r=>result=r);return result;},
     boot, tick(ms=0){now += ms; intervals.filter(Boolean).forEach(fn=>fn());},reinject(){return w.eval(source);},listenerCount(){return listenerCount;},
     close(){Object.defineProperty(w.Element.prototype,'innerHTML',htmlDescriptor);w.close();}};
@@ -73,6 +74,29 @@ test('public reply dialog reads only its target and fills selected candidate wit
     assert.equal(a.w.document.querySelector('[role="textbox"]').textContent,'你最想先讨论哪一部分？');
     assert.equal(sent,0);
     assert.match(a.status(),/已回填/);
+  } finally {a.close();}
+});
+
+test('one-click public reply sends once after exact fill verification', async () => {
+  const a=app({oneClickReply:true,response:()=>({ok:true,oneClickReply:true,candidates:[{id:'c1',text:'先聊这个。'},{id:'c2',text:'可以具体说说。'}],decision:{selectedId:'c1',reviewRequired:false,confidence:0.8}})});
+  try {
+    const editor=a.w.document.querySelector('[role="textbox"]');
+    let sent=0;
+    a.w.document.querySelector('[data-testid="tweetButton"]').onclick=()=>{sent++;editor.textContent='';};
+    await a.generate();
+    assert.equal(sent,1);
+    assert.match(a.status(),/页面已确认|回复已发送/);
+  } finally {a.close();}
+});
+
+test('one-click setting does not auto-send private messages', async () => {
+  const html='<div data-testid="DMConversation"><div data-testid="messageEntry">明天几点聊？</div><div data-testid="dmComposerTextInput" role="textbox" contenteditable="true"></div><button data-testid="tweetButton">发送</button></div>';
+  const a=app({html,url:'https://x.com/messages/123',oneClickReply:true,response:()=>({ok:true,oneClickReply:true,candidates:[{id:'c1',text:'明天下午。'},{id:'c2',text:'晚点确认。'}],decision:{selectedId:'c1',reviewRequired:false,confidence:0.8}})});
+  try {
+    let sent=0;a.w.document.querySelector('[data-testid="tweetButton"]').onclick=()=>sent++;
+    await a.generate();
+    assert.equal(sent,0);
+    assert.match(a.status(),/手动发送|已回填/);
   } finally {a.close();}
 });
 

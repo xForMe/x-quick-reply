@@ -23,13 +23,16 @@ test('first use shows the chosen humorous prompt and saves the full edited prefe
     assert.match(a.field('replyPrompt').value,/真实用户看到内容后顺手回一句/);
     assert.match(a.field('replyPrompt').value,/别拿痛处开玩笑/);
     assert.equal(a.field('autoLikeAfterReply').checked,false);
+    assert.equal(a.field('oneClickReply').checked,false);
     a.set('replyPrompt','  随口聊天，不用表情，别劝坚持。  ');
     a.set('replyExamples','  这句我会回：先忙你的。  ');
     a.set('autoLikeAfterReply',true);
+    a.set('oneClickReply',true);
     await a.save();
     assert.equal(a.writes.length,1);assert.equal(a.writes[0].replyPrompt,'随口聊天，不用表情，别劝坚持。');
     assert.equal(a.writes[0].replyExamples,'这句我会回：先忙你的。');
     assert.equal(a.writes[0].autoLikeAfterReply,true);
+    assert.equal(a.writes[0].oneClickReply,true);
     assert.match(a.field('status').textContent,/下次生成生效/);
   }finally{a.close();}
 });

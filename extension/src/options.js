@@ -48,7 +48,8 @@ function Options() {
     if (replyExamples.length > 3000) return report("我的回复示例不能超过 3000 字符", true);
     setSaving(true);
     try {
-      await chrome.storage.local.set({ gatewayUrl, tone: form.tone, candidateCount, replyPrompt, replyExamples, autoLikeAfterReply: form.autoLikeAfterReply });
+      if (typeof form.autoLikeAfterReply !== "boolean" || typeof form.oneClickReply !== "boolean") return report("回复开关设置无效，请重新勾选后保存", true);
+      await chrome.storage.local.set({ gatewayUrl, tone: form.tone, candidateCount, replyPrompt, replyExamples, autoLikeAfterReply: form.autoLikeAfterReply, oneClickReply: form.oneClickReply });
       setForm(previous => ({ ...previous, gatewayUrl, candidateCount, replyPrompt, replyExamples }));
       report("已保存，下次生成生效。");
     } catch (saveError) {
@@ -82,6 +83,9 @@ function Options() {
     h("label", null, h("input", { id: "autoLikeAfterReply", type: "checkbox", checked: form.autoLikeAfterReply === true, disabled: loading || saving,
       onChange: event => update("autoLikeAfterReply", event.target.checked) }), " 发送公开回复后打开原帖并自动点赞"),
     h("small", null, "仅在你实际点击 X 的发送按钮、且发送结果得到页面确认后执行；私信不适用。默认关闭，点赞失败不会重试。"),
+    h("label", null, h("input", { id: "oneClickReply", type: "checkbox", checked: form.oneClickReply === true, disabled: loading || saving,
+      onChange: event => update("oneClickReply", event.target.checked) }), " 一键生成并发送公开回复"),
+    h("small", null, "默认关闭。开启后，只有你主动点击扩展面板的“一键”按钮才会生成、回填并点击一次 X 回复按钮；打开帖子或私信不会自动发送。发送确认失败不重试。"),
     h("button", { id: "resetPrompt", type: "button", disabled: loading || saving, onClick: () => { update("replyPrompt", DEFAULT_REPLY_PROMPT); report("已恢复默认提示词，请点击保存。"); } }, "恢复默认提示词"),
     h("small", null, "恢复只修改上方文本，点击“保存”后生效。"),
     h("button", { id: "save", type: "button", disabled: loading || saving || loadFailed, onClick: save }, saving ? "保存中…" : "保存"),

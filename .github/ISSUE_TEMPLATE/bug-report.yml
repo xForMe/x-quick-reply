@@ -63,6 +63,31 @@ body:
       description: 可粘贴插件“复制排查信息”的结果；不要包含正文、草稿、帖子标识、网址或凭据
       render: json
 
+  - type: textarea
+    id: prototype
+    attributes:
+      label: 修复原型
+      description: 提供修复后高保真 HTML 原型路径或可访问链接；若确实不涉及用户可见界面，填写“不适用”并说明原因
+      placeholder: |
+        路径/链接：doc/<需求标识>/原型/index.html
+        覆盖状态：
+        评审状态：待评审
+    validations:
+      required: true
+
+  - type: textarea
+    id: technical
+    attributes:
+      label: 修复技术方案
+      description: 提供技术方案路径或可访问链接，说明根因、修改边界、失败停止条件、验证方式和未验证事项；Issue 讨论结论必须回写技术.md
+      placeholder: |
+        路径/链接：doc/<需求标识>/技术.md
+        根因与方案：
+        待验证事项：
+        评审状态：待评审
+    validations:
+      required: true
+
   - type: checkboxes
     id: safety
     attributes:

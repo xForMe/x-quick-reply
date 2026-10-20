@@ -1,5 +1,5 @@
 (() => {
-  const VERSION = "0.4.3";
+  const VERSION = "0.4.4";
   const INVALID_CONTEXT_TEXT = "插件连接已失效。请刷新 X 页面，再重新打开回复弹窗并生成。";
   function isInvalidContext(error) { return /^Extension context invalidated\.?$/i.test(error?.message || ""); }
   const READY_TEXT = "点击下方按钮，生成回复并填入输入框。";
@@ -25,8 +25,11 @@
   let dismissed = false;
   let inserting = false;
   let pendingFill = null;
+  let pendingSendAfterFill = false;
+  let sendConfirmation = null;
+  let oneClickSettingPromise = null;
   let panelMount = null;
-  let ui = { status: READY_TEXT, statusError: false, generating: false, routeHidden: false };
+  let ui = { status: READY_TEXT, statusError: false, generating: false, routeHidden: false, oneClickReply: null };
   const autoLike = createAutoLikeController({
     getSource: () => source,
     readContext,
@@ -71,6 +74,8 @@
     generation++;
     clearTimeout(pendingFill?.timer);
     pendingFill = null;
+    pendingSendAfterFill = false;
+    clearSendConfirmation();
     clearInterval(timer);
     autoLike.dispose();
     document.removeEventListener("input", onInput, true);
@@ -78,7 +83,25 @@
     ReactDOM.unmountComponentAtNode(panelMount);
     panelMount.remove();
   } };
+  oneClickSettingPromise = loadOneClickSetting();
   autoLike.restore();
+
+  function loadOneClickSetting() {
+    const storage = chrome.storage?.local;
+    if (!storage || typeof storage.get !== "function") {
+      setStatus("读取一键回复设置失败：chrome.storage.local.get 不可用", true);
+      return Promise.resolve(null);
+    }
+    return Promise.resolve(storage.get({ oneClickReply: false })).then((settings) => {
+      if (typeof settings.oneClickReply !== "boolean") {
+        setStatus("一键回复开关设置无效，请重新保存扩展设置", true);
+        return null;
+      }
+      ui.oneClickReply = settings.oneClickReply;
+      renderPanel();
+      return settings.oneClickReply;
+    }).catch((error) => setStatus(`读取一键回复设置失败：${error.message}`, true));
+  }
 
   function renderPanel() {
     if (!panelMount) return;
@@ -93,6 +116,7 @@
       selectedId: state.selectedId,
       decision: state.decision,
       pendingFill: !!pendingFill,
+      oneClickReply: ui.oneClickReply,
       onAction: handlePanelAction,
       onCandidateSelect: selectCandidate
     }), panelMount);
@@ -127,6 +151,7 @@
   function QuickReplyPanel(props) {
     const h = React.createElement;
     const reviewRequired = props.decision?.reviewRequired === true;
+    const settingLoading = props.oneClickReply === null;
     const fillHidden = !props.selectedId || reviewRequired;
     const fillDisabled = !props.selectedId || reviewRequired || props.pendingFill;
     const candidateNodes = props.candidates.map(candidate => h(
@@ -149,7 +174,7 @@
       ),
       h("div", { className: `qr-status${props.statusError ? " error" : ""}`, "data-role": "status", role: "status" }, props.status),
       h("button", { type: "button", className: "qr-primary", "data-action": "generate", disabled: props.generating || props.pendingFill,
-        onClick: () => props.onAction("generate") }, props.generating ? "生成中，请稍候…" : "生成并填入回复"),
+        onClick: () => props.onAction("generate") }, settingLoading ? "读取设置中…" : props.generating ? "生成中，请稍候…" : props.oneClickReply ? "生成并发送回复" : "生成并填入回复"),
       h("div", { className: "qr-candidates", "data-role": "candidates" }, candidateNodes),
       h("button", { type: "button", className: "qr-fill", "data-action": "fill", hidden: fillHidden, disabled: fillDisabled,
         onClick: () => props.onAction("fill") }, "回填输入框"),
@@ -160,6 +185,10 @@
 
   async function generate() {
     if (pendingFill) return;
+    if (ui.oneClickReply === null) {
+      await oneClickSettingPromise;
+      if (ui.oneClickReply === null) return;
+    }
     const current = ++generation;
     source = null;
     state = { candidates: [], decision: null, mode: "" };
@@ -185,11 +214,12 @@
     if (!sourceIsCurrent()) return setStatus("会话或草稿已变化，请重新生成", true);
     if (!response?.ok) return setStatus(response?.error || "生成失败", true);
     autoLike.configure(response.autoLikeAfterReply === true);
+    ui.oneClickReply = response.oneClickReply === true;
     state = { candidates: response.candidates, decision: response.decision, selectedId: response.decision.selectedId, mode: response.mode };
     renderPanel();
     if (state.decision.reviewRequired) return setStatus("百炼未选择合适回复，请人工起草", true);
     setStatus("已生成，百炼已选择候选");
-    fillSelected();
+    fillSelected({ sendAfterFill: ui.oneClickReply && source.kind === "public-reply" });
   }
 
   /**
@@ -239,6 +269,9 @@
 
     function configure(value) {
       enabled = value === true;
+      // The worker response is the current saved snapshot for this generation.
+      // Mark it resolved before the synthetic send click so one-click reply and
+      // auto-like share exactly one confirmation workflow.
       settingResolved = true;
     }
 
@@ -533,8 +566,9 @@
     }).reverse();
   }
 
-  async function fillSelected() {
+  async function fillSelected({ sendAfterFill = false } = {}) {
     if (pendingFill) return;
+    pendingSendAfterFill = false;
     if (!sourceIsCurrent()) return invalidate("会话或草稿已变化，请重新生成");
     const selected = state.candidates.find((candidate) => candidate.id === state.selectedId);
     if (!selected) return setStatus("请先选择候选回复", true);
@@ -542,6 +576,7 @@
     if (!editor) return setStatus("没有找到消息输入框，请点击输入区域后重试", true);
     if (source.owned && source.draft === selected.text) return setStatus("已回填此候选，无需重复填入；请检查后手动发送");
     const operation = { source, text: selected.text, timer: null };
+    pendingSendAfterFill = sendAfterFill === true;
     pendingFill = operation;
     renderPanel();
     setGenerating(false);
@@ -608,13 +643,68 @@
       if (!sourceIsCurrent(operation.text)) return invalidate("回填核验失败：目标或草稿发生变化，请检查输入框；未自动重试或发送");
       source.draft = operation.text;
       source.owned = true;
+      const shouldSend = pendingSendAfterFill;
+      pendingSendAfterFill = false;
       pendingFill = null;
       renderPanel();
       setGenerating(false);
+      if (shouldSend) return sendSelectedReply();
       setStatus(autoLike.isEnabled() && source.kind === "public-reply"
         ? "已回填输入框，可切换候选后再次回填；请检查后手动发送，发送成功后将打开原帖并自动点赞"
         : "已回填输入框，可切换候选后再次回填；请检查后手动发送");
     }, 150);
+  }
+
+  function sendSelectedReply() {
+    if (!source || source.kind !== "public-reply") return setStatus("一键发送仅支持公开帖子回复，请手动发送", true);
+    if (!sourceIsCurrent(source.draft)) return invalidate("一键发送前会话或草稿已变化，未发送");
+    const buttons = [...(source.dialog?.querySelectorAll('[data-testid^="tweetButton"]') || [])]
+      .filter(button => visible(button) && isEnabledSendButton(button));
+    if (buttons.length !== 1) return invalidate(buttons.length
+      ? "一键发送失败：检测到多个可用回复按钮，未发送"
+      : "一键发送失败：没有找到可用回复按钮，未发送");
+    try {
+      setStatus("已通过核验，正在点击回复按钮…");
+      buttons[0].click();
+    } catch (error) {
+      return invalidate(`一键发送失败：${error.message}`);
+    }
+    // When auto-like is enabled its existing controller owns the same send
+    // confirmation and the post-send workflow. Do not create a second poller.
+    if (autoLike.isPending()) return;
+    startSendConfirmation();
+  }
+
+  function startSendConfirmation() {
+    clearSendConfirmation();
+    sendConfirmation = { source, deadline: Date.now() + SEND_CONFIRMATION_TIMEOUT_MS, timer: null };
+    setStatus("已点击回复，正在等待 X 确认发送…");
+    sendConfirmation.timer = setInterval(checkSendConfirmation, 100);
+    checkSendConfirmation();
+  }
+
+  function checkSendConfirmation() {
+    if (!sendConfirmation) return;
+    const editor = sendConfirmation.source?.editor;
+    const confirmed = !editor?.isConnected || (editor.isConnected && !editorText(editor).trim());
+    if (confirmed) {
+      clearSendConfirmation();
+      setStatus("回复已发送，页面已确认");
+      return;
+    }
+    if (Date.now() >= sendConfirmation.deadline) {
+      clearSendConfirmation();
+      invalidate("一键发送未确认，草稿已保留，未自动重试");
+    }
+  }
+
+  function clearSendConfirmation() {
+    if (sendConfirmation?.timer) clearInterval(sendConfirmation.timer);
+    sendConfirmation = null;
+  }
+
+  function isEnabledSendButton(button) {
+    return !!button && !button.disabled && button.getAttribute("aria-disabled") !== "true";
   }
 
   function findDmEditor() {
@@ -696,6 +786,8 @@
     generation++;
     clearTimeout(pendingFill?.timer);
     pendingFill = null;
+    pendingSendAfterFill = false;
+    clearSendConfirmation();
     autoLike.cancel(true);
     source = null;
     state = { candidates: [], decision: null, mode: "" };
@@ -756,6 +848,11 @@
         // checked by node identity or its captured status ID before clicking.
         if (autoLike.isPending()) {
           autoLike.handleRouteChange();
+        } else if (sendConfirmation) {
+          // A successful X send can close the modal and change the SPA route;
+          // keep the one-shot confirmation alive until the editor disappears.
+          sendConfirmation.source.url = location.href;
+          checkSendConfirmation();
         } else {
           invalidate(hadWork ? "页面已切换，旧回复已停止。请点击下方按钮重新生成。" : READY_TEXT, hadWork);
         }
