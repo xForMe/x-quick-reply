@@ -36,6 +36,7 @@
   let panelMount = null;
   // quick-post: draft cache is owned by the service worker; these are views.
   let postCache = [];
+  let postHistoryCount = 0;
   let postBatch = null;
   let postFilledId = null;
   let ui = { status: READY_TEXT, statusError: false, generating: false, routeHidden: false, countdown: null };
@@ -176,6 +177,7 @@
       postCache: postCache,
       postBatch: postBatch,
       postFilledId: postFilledId,
+      postHistoryCount,
       countdown: ui.countdown,
       sending: !!sendConfirmation,
       onAction: handlePanelAction,
@@ -222,6 +224,9 @@
       case "post-clear":
         postCacheOp("clear");
         break;
+      case "post-clear-history":
+        postCacheOp("clear-history");
+        break;
       default:
         throw new Error(`未知面板操作：${action}`);
     }
@@ -261,6 +266,13 @@
       `选择置信度：${(props.decision.confidence * 100).toFixed(1)}%（不代表回复正确率）`
     ));
     const postMode = props.panelKind === "post";
+    const postSource = props.postBatch?.board || "热门话题榜";
+    const postBatchAction = postSource === "热门推文榜" ? "post-batch-tweets" : "post-batch";
+    const postSourceAction = postSource === "热门推文榜" ? "post-batch" : "post-batch-tweets";
+    const postSourceActionLabel = postSource === "热门推文榜" ? "改用热门话题榜" : "改用热门推文榜";
+    const postStep1 = props.generating ? "done" : (props.postBatch || props.postCache.length ? "done" : "active");
+    const postStep2 = props.generating ? "active" : (props.postBatch || props.postCache.length ? "done" : "");
+    const postStep3 = props.postFilledId ? "done" : (props.postCache.length ? "active" : "");
     // Cache entries are grouped by their source topic: each topic keeps its
     // own post(s) underneath instead of one flat, cramped list.
     const groups = [];
@@ -274,16 +286,17 @@
       h("div", { className: "qr-topic-head" }, group.title),
       h("div", { className: "qr-topic-posts" }, group.items.map(item => h(
         "div", { key: item.id, className: `qr-cache-item${item.usedAt ? " used" : ""}`, "data-cache-item": item.id },
+        h("div", { className: "qr-cache-top" },
+          h("span", { className: `qr-cache-tag${item.usedAt ? " used" : ""}` }, item.usedAt ? "已填入草稿" : "可选候选"),
+          h("span", { className: "qr-cache-meta" }, `${new Date(item.createdAt).toLocaleString()}${item.text === props.postBatch?.recommendedText ? " · 决策推荐" : ""}${item.usedAt ? " · 已发过" : ""}${item.sessionOnly ? " · 未入缓存" : ""}`)),
         h("div", { className: "qr-cache-text" }, item.text),
         item.checkNotes.length ? h("div", { className: "qr-cache-check" }, item.checkNotes.join("；")) : null,
-        h("div", { className: "qr-cache-meta" },
-          `${new Date(item.createdAt).toLocaleString()}${item.text === props.postBatch?.recommendedText ? " · 决策推荐" : ""}${item.usedAt ? " · 已发过" : ""}${item.sessionOnly ? " · 未入缓存" : ""}`),
         h("div", { className: "qr-cache-actions" },
           item.usedAt
             ? h("button", { type: "button", "data-action": "post-unmark", disabled: props.pendingFill,
                 onClick: () => props.onAction("post-unmark", item.id) }, "放回可选")
             : h("button", { type: "button", className: "qr-fill", "data-action": "post-fill", disabled: props.pendingFill,
-                onClick: () => props.onAction("post-fill", item.id) }, "填入发帖框"),
+                onClick: () => props.onAction("post-fill", item.id) }, "填入草稿"),
           h("button", { type: "button", "data-action": "post-delete", disabled: props.pendingFill,
             onClick: () => props.onAction("post-delete", item.id) }, "删除")
         )
@@ -291,24 +304,36 @@
     ));
     return h("aside", { id: PANEL_ID, hidden: props.hidden, "aria-busy": String(props.generating || props.pendingFill) },
       h("div", { className: "qr-header" },
-        h("strong", null, `${postMode ? "快速发帖" : "快速回复"} · ${props.version}`),
+        h("strong", null, postMode ? "快速发帖" : `快速回复 · ${props.version}`),
         h("button", { type: "button", title: "关闭", "data-action": "close", onClick: () => props.onAction("close") }, "×")
       ),
-      h("div", { className: `qr-status${props.statusError ? " error" : ""}`, "data-role": "status", role: "status" }, props.status),
       postMode ? h(React.Fragment, null,
-        h("button", { type: "button", className: "qr-primary", "data-action": "post-batch", disabled: props.generating || props.pendingFill,
-          onClick: () => props.onAction("post-batch") }, props.generating ? "生成中，请稍候…" : "生成新一批（热门话题榜 5 选 1）"),
-        h("button", { type: "button", className: "qr-ghost", "data-action": "post-batch-tweets", disabled: props.generating || props.pendingFill,
-          onClick: () => props.onAction("post-batch-tweets") }, "改用热门推文榜生成"),
-        props.postBatch ? h("div", { className: "qr-reason" },
-          `本批来源：${props.postBatch.board || "热门话题榜"} · ${props.postBatch.topicCount || 0} 个话题各一条帖文${props.postBatch.evicted ? ` · 已自动清理 ${props.postBatch.evicted} 条` : ""}`) : null,
-        h("div", { className: "qr-cache-head" },
-          h("span", null, `候选缓存池 · ${props.postCache.length} 条`),
-          h("button", { type: "button", "data-action": "post-clear", disabled: props.pendingFill || !props.postCache.length,
-            onClick: () => props.onAction("post-clear") }, "清空缓存")
-        ),
-        h("div", { className: "qr-candidates", "data-role": "cache" }, cacheNodes.length ? cacheNodes : h("div", { className: "qr-reason" }, "暂无缓存候选。生成新一批后，未使用的候选会保留到下次。"))
+        h("div", { className: "qr-post-body" },
+          h("div", { className: "qr-post-source" },
+            h("span", { className: "qr-source-pill" }, h("span", { "aria-hidden": "true" }, "●"), `当前来源：${postSource}`),
+            h("button", { type: "button", className: "qr-source-switch", "data-action": postSourceAction,
+              disabled: props.generating || props.pendingFill,
+              onClick: () => props.onAction(postSourceAction) }, postSourceActionLabel)
+          ),
+          h("div", { className: "qr-workflow", "aria-label": "发帖流程" },
+            h("div", { className: `qr-step ${postStep1}`, "aria-current": postStep1 === "active" ? "step" : undefined }, "1 · 选话题"),
+            h("div", { className: `qr-step ${postStep2}`, "aria-current": postStep2 === "active" ? "step" : undefined }, "2 · 生成候选"),
+            h("div", { className: `qr-step ${postStep3}`, "aria-current": postStep3 === "active" ? "step" : undefined }, "3 · 填入草稿")
+          ),
+          h("div", { className: `qr-status${props.statusError ? " error" : ""}`, "data-role": "status", role: "status" }, props.status),
+          h("button", { type: "button", className: "qr-primary", "data-action": postBatchAction, disabled: props.generating || props.pendingFill,
+            onClick: () => props.onAction(postBatchAction) }, props.generating ? "生成中，请稍候…" : "生成新一批"),
+          h("div", { className: "qr-cache-head" },
+            h("span", null, `候选缓存池 · ${props.postCache.length} 条`, h("small", { className: "qr-history-count" }, `历史去重 ${props.postHistoryCount} 条`)),
+            h("button", { type: "button", "data-action": "post-clear-history", disabled: props.pendingFill || !props.postHistoryCount,
+              onClick: () => props.onAction("post-clear-history") }, "清除去重历史"),
+            h("button", { type: "button", "data-action": "post-clear", disabled: props.pendingFill || !props.postCache.length,
+              onClick: () => props.onAction("post-clear") }, "清空缓存")
+          ),
+          h("div", { className: "qr-candidates", "data-role": "cache" }, cacheNodes.length ? cacheNodes : h("div", { className: "qr-reason" }, "暂无缓存候选。生成新一批后，未使用的候选会保留到下次。"))
+        )
       ) : h(React.Fragment, null,
+        h("div", { className: `qr-status${props.statusError ? " error" : ""}`, "data-role": "status", role: "status" }, props.status),
         h("button", { type: "button", className: "qr-primary", "data-action": "generate",
           disabled: props.generating || props.pendingFill || !!props.countdown || props.sending,
           onClick: () => props.onAction("generate") }, props.generating ? "生成中，请稍候…" : "生成并填入回复"),
@@ -385,7 +410,7 @@
         target: context.target, dialog: context.dialog, textNode: null, targetLinks: [],
         draft: editorText(context.editor) };
       setGenerating(true);
-      setStatus(`正在从${boardLabel}获取 5 条、决策并生成帖文，请稍候…`);
+      setStatus(`正在从${boardLabel}获取话题并生成候选帖文，请稍候…`);
       response = await chrome.runtime.sendMessage({ type: "GENERATE_POST_BATCH", source: board });
     } catch (error) {
       if (current !== generation) return;
@@ -417,8 +442,11 @@
       return setStatus(`${response.cacheError}。本批候选仅本次可用（标注“未入缓存”），填入后不保留到下次`, true);
     }
     postCache = response.cache;
-    let text = `本批来源：${postBatch.board}。${response.topics.length} 个话题各一条帖文，已入缓存池（共 ${response.cache.length} 条）；`
-      + (recommended ? "决策推荐 1 条。" : "决策未推荐（全部不合适），请自选。") + "每次选 1 条填入。";
+    postHistoryCount = response.historyCount ?? postHistoryCount + response.candidates.length - (response.skippedCount || 0);
+    let text = `本批来源：${postBatch.board}。候选已入缓存池（共 ${response.cache.length} 条）；`
+      + (recommended ? "已标记 1 条推荐。" : "本批未标记推荐，请自选。") + "每次选 1 条填入。";
+    if (response.skippedCount) text += ` 已跳过 ${response.skippedCount} 条历史重复。`;
+    if (!response.cache.length && response.skippedCount) text = `本批 ${response.skippedCount} 条候选全部命中历史去重，未新增缓存；未自动重试或换源。`;
     if (response.evicted) text += ` 缓存已满，已自动清理 ${response.evicted} 条（先已发过的，再最旧的）。`;
     setStatus(text);
     renderPanel();
@@ -474,11 +502,12 @@
       const response = await chrome.runtime.sendMessage({ type: "POST_CACHE_OP", op, id });
       if (!response?.ok) throw new Error(response?.error || "缓存操作失败");
       postCache = response.items;
+      if (op === "clear-history") postHistoryCount = response.historyCount || 0;
       if (op === "clear") postFilledId = null;
       if (op === "unmark" && postFilledId === id) postFilledId = null;
       if (op === "delete" && postFilledId === id) postFilledId = null;
       renderPanel();
-      setStatus(op === "clear" ? "已清空候选缓存池" : op === "delete" ? "已删除 1 条缓存候选" : "已放回可选列表（草稿文本仍留在发帖框，由你处理）");
+      setStatus(op === "clear-history" ? "已清除历史去重记录；相同正文下次可能再次进入缓存" : op === "clear" ? "已清空候选缓存池" : op === "delete" ? "已删除 1 条缓存候选" : "已放回可选列表（草稿文本仍留在发帖框，由你处理）");
     } catch (error) {
       return setStatus(`缓存操作失败：${error instanceof Error ? error.message : error}`, true);
     }
@@ -489,7 +518,8 @@
       const response = await chrome.runtime.sendMessage({ type: "LIST_POST_CACHE" });
       if (!response?.ok) throw new Error(response?.error || "缓存读取失败");
       postCache = response.items;
-      setStatus(`发帖模式：从 xzhishu 热榜取 5 条话题、决策定 1 条，生成帖文入缓存池。当前缓存 ${postCache.length} 条，每次选 1 条填入，发帖由你人工点击。`);
+      postHistoryCount = response.historyCount || 0;
+      setStatus(`发帖模式：候选按来源话题分组。当前缓存 ${postCache.length} 条，历史去重 ${postHistoryCount} 条，每次选 1 条填入，发帖由你人工点击。`);
     } catch (error) {
       return setStatus(error instanceof Error ? error.message : "缓存读取失败", true);
     }

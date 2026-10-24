@@ -1,6 +1,8 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const vm = require('node:vm');
+const { webcrypto } = require('node:crypto');
+const { TextEncoder } = require('node:util');
 const fs = require('node:fs');
 const path = require('node:path');
 const source = require('./extension-fixture.cjs').readScript('service-worker.js');
@@ -17,7 +19,7 @@ const senderFor = (url, extra = {}) => ({ id: 'extension-id', url, tab: { id: 17
 function runtime(responses, {tabUrl = 'https://x.com/messages/123', tabError, settings={}} = {}) {
   let listener;
   const calls = [];
-  const context = { URL, AbortController, setTimeout, clearTimeout,
+  const context = { URL, AbortController, TextEncoder, setTimeout, clearTimeout,
     chrome: { runtime: { id: 'extension-id', onMessage: { addListener(fn) { listener = fn; } } },
       tabs: { async get(id) { assert.equal(id,17); if(tabError) throw new Error(tabError); return {id, url: typeof tabUrl === 'function' ? tabUrl() : tabUrl}; } },
       storage: { local: { async get() { return { candidateCount: 2, ...settings }; } } } },
@@ -246,8 +248,8 @@ function postRuntime(responses, { tabUrl = 'https://x.com/compose/post', setting
   const calls = [];
   const storage = { ...store };
   let seq = 0;
-  const context = { URL, AbortController, setTimeout, clearTimeout,
-    crypto: { randomUUID: () => `uuid-${++seq}` },
+  const context = { URL, AbortController, TextEncoder, setTimeout, clearTimeout,
+    crypto: { randomUUID: () => `uuid-${++seq}`, subtle: webcrypto.subtle },
     chrome: { runtime: { id: 'extension-id', onMessage: { addListener(fn) { listener = fn; } } },
       tabs: { async get(id) { assert.equal(id, 17); return { id, url: typeof tabUrl === 'function' ? tabUrl() : tabUrl }; } },
       storage: { local: {
@@ -292,6 +294,30 @@ test('post batch runs fetch, one post per topic, decision and caches every draft
   assert.equal(app.storage[CACHE_KEY].items.length, 5);
   assert.equal(result.cache.length, 5);
   assert.equal(result.cacheError, null);
+  assert.equal(result.skippedCount, 0);
+  assert.equal(result.historyCount, 5);
+});
+
+test('previously used/generated post text is skipped across batches and not regenerated into the pool', async () => {
+  const app = postRuntime([topicsResponse(), { body: postCandidates() }, { body: postDecision() },
+    topicsResponse(), { body: postCandidates() }, { body: postDecision() }]);
+  const first = await app.batch();
+  assert.equal(first.ok, true, first.error);
+  const second = await app.batch();
+  assert.equal(second.ok, true, second.error);
+  assert.equal(second.skippedCount, 5);
+  assert.equal(second.cache.length, 5);
+  assert.equal(second.historyCount, 5);
+});
+
+test('clearing history is explicit and does not clear the candidate cache', async () => {
+  const app = postRuntime([topicsResponse(), { body: postCandidates() }, { body: postDecision() }]);
+  const batch = await app.batch();
+  assert.equal(batch.historyCount, 5);
+  const cleared = await app.cacheOp('clear-history');
+  assert.equal(cleared.ok, true, cleared.error);
+  assert.equal(cleared.historyCount, 0);
+  assert.equal(app.storage[CACHE_KEY].items.length, 5);
 });
 
 test('decision abstention still caches every post but marks none recommended', async () => {

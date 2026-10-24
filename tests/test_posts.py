@@ -62,10 +62,20 @@ class PostModelTests(unittest.TestCase):
         self.assertEqual(len(result["candidates"]), 2)
         self.assertEqual([item["topicId"] for item in result["candidates"]], ["t1", "t2"])
         self.assertEqual(result["candidates"][0]["id"], "c1")
-        self.assertEqual(result["meta"]["promptVersion"], "post-policy.v1")
+        self.assertEqual(result["meta"]["promptVersion"], "post-policy.v2")
         self.assertIn(models.post_policy, calls[0][2]["messages"][0]["content"])
+        self.assertIn("直接问一个具体问题", calls[0][2]["messages"][0]["content"])
+        self.assertIn("不要为了互动硬加", calls[0][2]["messages"][0]["content"])
         body = json.loads(calls[0][2]["messages"][1]["content"])
         self.assertEqual([t["id"] for t in body["topics"]], ["t1", "t2"])
+
+    def test_user_post_examples_teach_style_without_becoming_facts(self):
+        models, calls = self.models()
+        request = {**post_request(), "postExamples": "有没有觉得这个价格有点贵啊\n\n大家怎么觉得？？？"}
+        models.posts_generate(request)
+        system = calls[0][2]["messages"][0]["content"]
+        self.assertIn("句式、分行、口语标点、追问节奏", system)
+        self.assertIn("不能照抄其中的内容、人物、经历", system)
 
     def test_generation_rejects_missing_or_duplicated_topic_coverage(self):
         def run(items):

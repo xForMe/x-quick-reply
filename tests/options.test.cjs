@@ -82,7 +82,7 @@ test('storage read or write errors remain visible without reporting success',asy
 test('post prompt fields are editable and validated like the reply prompt',async()=>{
   const a=await app();
   try{
-    assert.match(a.field('postPrompt').value,/吸引目标读者留言互动/);
+    assert.match(a.field('postPrompt').value,/用户平时发帖|直接问一个具体问题/);
     a.set('postPrompt',' 就事论事，结尾用四选一。  ');
     a.set('postExamples','  这条我会发：今天遇到一件事。  ');
     await a.save();
@@ -92,6 +92,16 @@ test('post prompt fields are editable and validated like the reply prompt',async
     await a.save();
     assert.match(a.field('status').textContent,/发帖提示词/);
   }finally{a.close();}
+});
+test('the previous built-in post prompt migrates without overwriting custom prompts',async()=>{
+  const legacy=`面向 X 发帖，目标是吸引目标读者留言互动。
+帖文开头用一个具体细节或反差钩住人，结尾用容易回答的开放问题或低门槛选项（例如四选一、报数、站队）。
+只使用选定话题的标题与摘要事实；不捏造个人经历、数据或他人言行。
+时效性事实留有余地并列入核实提示，不写进帖文正文。
+像真人随手发的一条：不用营销腔、标签堆砌或 AI 式收尾，没有自然笑点就不写笑点。
+以上中文只描述风格；实际帖文跟随话题标题的主要语言。`;
+  const a=await app({postPrompt:legacy});
+  try{assert.match(a.field('postPrompt').value,/用户平时发帖|直接问一个具体问题/);assert.doesNotMatch(a.field('postPrompt').value,/低门槛选项/);}finally{a.close();}
 });
 test('post categories are selectable and saved with the post settings',async()=>{
   const a=await app();

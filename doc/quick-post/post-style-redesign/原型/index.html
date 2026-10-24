@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>发帖格式与口吻调整 · 原型</title>
+  <style>
+    :root{--bg:#f3f5f8;--surface:#fff;--ink:#152033;--muted:#687386;--line:#dfe4ec;--primary:#6d3dd8;--soft:#f0eaff;--ok:#137a55;--okbg:#e4f7ef;--bad:#b42318;--badbg:#fff0ee;--warn:#8b5a11;--warnbg:#fff5dd}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.55 system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif}.wrap{max-width:1100px;margin:0 auto;padding:28px}.head{margin-bottom:18px}.eyebrow{font-size:11px;letter-spacing:.12em;font-weight:800;color:var(--primary)}h1{margin:6px 0 4px;font-size:28px}h2{margin:0 0 12px;font-size:16px}.head p{margin:0;color:var(--muted)}.grid{display:grid;grid-template-columns:minmax(0,1fr) 410px;gap:18px}.card{border:1px solid var(--line);border-radius:16px;background:var(--surface);box-shadow:0 12px 32px #25334b0d}.card-head{padding:16px 18px;border-bottom:1px solid var(--line);font-weight:800}.body{padding:18px}.ref{display:grid;grid-template-columns:1fr 1fr;gap:12px}.sample{min-height:180px;padding:18px;border:1px solid var(--line);border-radius:13px;background:#fbfcfe}.sample.bad{background:#fffaf9}.sample h3{margin:0 0 12px;font-size:12px;color:var(--muted)}.sample p{white-space:pre-wrap;margin:0;font-size:17px;line-height:1.7}.sample.bad p{font-size:15px;line-height:1.55}.note{margin-top:12px;padding:11px 12px;border-radius:10px;color:var(--warn);background:var(--warnbg);font-size:12px}.rules{display:grid;gap:10px;margin-top:14px}.rule{display:flex;gap:10px;padding:12px;border:1px solid var(--line);border-radius:11px}.rule b{min-width:78px;color:var(--primary)}.rule span{color:var(--muted)}.panel{overflow:hidden}.panel-head{display:flex;justify-content:space-between;align-items:center;padding:16px 18px;border-bottom:1px solid var(--line)}.panel-title{font-weight:800}.tag{padding:4px 8px;border-radius:999px;color:var(--primary);background:var(--soft);font-size:11px;font-weight:800}.panel-body{padding:16px}.steps{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:12px}.step{padding:8px 5px;text-align:center;border:1px solid var(--line);border-radius:9px;color:var(--muted);font-size:11px}.step.on{border-color:#cdbcf5;color:var(--primary);background:var(--soft);font-weight:800}.status{padding:11px 12px;border-radius:10px;background:#f5f7fa;color:var(--muted);font-size:12px}.status.ok{background:var(--okbg);color:var(--ok)}.status.bad{background:var(--badbg);color:var(--bad)}button{min-height:40px;padding:9px 12px;border-radius:9px;border:1px solid var(--line);background:#fff;color:var(--ink);font:inherit;cursor:pointer}button.primary{width:100%;margin:10px 0;color:#fff;border-color:var(--primary);background:var(--primary);font-weight:800}.controls{display:flex;gap:7px;flex-wrap:wrap;margin-top:12px}.controls button[aria-pressed=true]{color:var(--primary);border-color:#cdbcf5;background:var(--soft)}.topic{margin-top:15px;padding-top:12px;border-top:1px solid var(--line)}.topic-title{font-size:12px;font-weight:800;color:var(--muted)}.post{margin-top:8px;padding:13px;border:1px solid var(--line);border-radius:12px}.post.used{opacity:.58}.post-text{white-space:pre-wrap;font-size:16px;line-height:1.75}.check{margin-top:9px;padding:8px 9px;border-radius:8px;background:var(--warnbg);color:var(--warn);font-size:11px}.actions{display:flex;gap:7px;margin-top:10px}.actions button{flex:1;font-size:12px}.actions .fill{color:#fff;border-color:var(--primary);background:var(--primary)}.settings{margin-top:18px}.field{margin-top:12px}.field label{display:block;margin-bottom:6px;font-weight:800;font-size:12px}.fake-input{padding:12px;border:1px solid var(--line);border-radius:10px;white-space:pre-wrap;color:#39465b;background:#fbfcfe;font-size:13px}.help{margin-top:6px;color:var(--muted);font-size:11px}@media(max-width:850px){.wrap{padding:16px}.grid{grid-template-columns:1fr}.ref{grid-template-columns:1fr}.panel{max-width:100%}}
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <header class="head"><div class="eyebrow">DESIGN REVIEW · POST STYLE</div><h1>先像你，再谈“自然”</h1><p>第一栏是用户自己的口吻样例；第二栏只借鉴他人示例的段落结构。示例内容仅用于评审格式，不代表真实榜单或模型结果。</p></header>
+    <div class="grid">
+      <section>
+                <article class="card"><div class="card-head">你的口吻 vs 他人的结构参考</div><div class="body"><div class="ref"><div class="sample"><h3>你的发帖样例 · 优先学习</h3><p>有没有觉得国内的模型智商得要比ChatGPT和Claude都贵啊
+
+现在用了下，觉得ChatGPT还会便宜点，大家怎么觉得？
+
+平时你们买token都用的是哪个模型？？？</p></div><div class="sample"><h3>他人示例 · 只借鉴结构</h3><p>先说一件今天刚做完的事。
+
+最近又遇到一个实际问题，前面的处理方式不太够用了。
+
+准备换一套更省事的方案，工具越来越多，反而更容易犹豫。</p></div></div><div class="note">第二栏不提供用户事实或固定措辞，只说明“多段记录式陈述”这种结构；模型应优先学习第一栏的提问节奏和口语标点。</div><div class="rules"><div class="rule"><b>分行</b><span>2–6 个短句行，通常 2–4 个自然段，允许空行。</span></div><div class="rule"><b>你的节奏</b><span>可以“先问 → 补充判断 → 再追问”，但不要求每条完整套用。</span></div><div class="rule"><b>禁用模板</b><span>不默认使用“大家怎么看”“报数”“站队”“评论区聊聊”等固定话术。</span></div></div></div></article>
+                <article class="card settings"><div class="card-head">发帖设置 · 口吻说明</div><div class="body"><div class="field"><label>默认规则（示意）</label><div class="fake-input">先像你平时发帖：直接问一个具体问题，补充自己的判断，再自然追问一句；也可以连续写几段观察。短句分行，段落之间留一点空白。不要为了互动硬加“评论区”“报数”“站队”，也不要机械添加“？？？”。</div><div class="help">建议填写你自己的历史发帖；模型只学习句式、分行、口语标点和追问节奏，不复制事实。</div></div><div class="field"><label>我的发帖示例（可选）</label><div class="fake-input">有没有觉得国内的模型智商得要比ChatGPT和Claude都贵啊
+
+现在用了下，觉得ChatGPT还会便宜点，大家怎么觉得？
+
+平时你们买token都用的是哪个模型？？？</div></div></div></article>
+      </section>
+      <aside class="card panel"><div class="panel-head"><span class="panel-title">快速发帖</span><span class="tag">格式调整预览</span></div><div class="panel-body"><div class="steps"><div class="step on">1 · 选话题</div><div class="step">2 · 生成候选</div><div class="step">3 · 填入草稿</div></div><div id="status" class="status">缓存池为空。生成一批后，候选按来源话题分组保留。</div><button id="generate" class="primary">生成新一批</button><div id="pool"></div><div class="controls" aria-label="原型状态"><button data-state="empty" aria-pressed="true">空态</button><button data-state="loading" aria-pressed="false">生成中</button><button data-state="ready" aria-pressed="false">有候选</button><button data-state="filled" aria-pressed="false">已填入</button><button data-state="error" aria-pressed="false">失败</button></div></div></aside>
+    </div>
+  </main>
+  <script>
+    const status=document.querySelector('#status'),pool=document.querySelector('#pool'),generate=document.querySelector('#generate');
+    const posts=[{topic:'模型价格与使用',text:'有没有觉得国内的模型智商得要比ChatGPT和Claude都贵啊\n\n现在用了下，觉得ChatGPT还会便宜点，大家怎么觉得？\n\n平时你们买token都用的是哪个模型？？？',check:'发布前核实：价格、套餐与模型能力需发布前确认'},{topic:'连续记录式表达',text:'先说一件今天刚做完的事。\n\n最近又遇到一个实际问题，前面的处理方式不太够用了。\n\n准备换一套更省事的方案，工具越来越多，反而更容易犹豫。',check:'发布前核实：示例只演示结构，不是事实素材'}];
+    function setState(state){document.querySelectorAll('[data-state]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.state===state)));generate.disabled=state==='loading';generate.textContent=state==='loading'?'生成中，请稍候…':'生成新一批';pool.innerHTML='';if(state==='empty'){status.className='status';status.textContent='缓存池为空。生成一批后，候选按来源话题分组保留。';return}if(state==='loading'){status.className='status';status.textContent='正在生成候选并写入缓存…';return}if(state==='error'){status.className='status bad';status.textContent='生成失败（阶段 posts.parse）：候选格式不符合契约。本批没有入池，请检查错误后重新发起。';return}status.className='status '+(state==='filled'?'ok':'');status.textContent=state==='filled'?'已填入草稿，尚未发送。请检查正文和核实提示，再点击 X 的发帖按钮。':'缓存池 2 条，优先模仿你的提问节奏，不强制套用评论区话术。';posts.forEach((it,i)=>{const t=document.createElement('div');t.className='topic';t.innerHTML='<div class="topic-title">'+it.topic+'</div><div class="post '+(state==='filled'&&i===0?'used':'')+'"><div class="post-text">'+it.text+'</div><div class="check">'+it.check+'</div><div class="actions"><button class="fill">'+(state==='filled'&&i===0?'放回可选':'填入草稿')+'</button><button>删除</button></div></div>';pool.appendChild(t)});}
+    document.querySelectorAll('[data-state]').forEach(b=>b.addEventListener('click',()=>setState(b.dataset.state)));generate.addEventListener('click',()=>setState('ready'));setState('empty');
+  </script>
+</body>
+</html>
+
+

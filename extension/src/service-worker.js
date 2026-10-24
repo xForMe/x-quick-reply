@@ -1,8 +1,10 @@
-import { DEFAULTS } from "./settings.js";
+import { DEFAULTS, migrateSettings } from "./settings.js";
 
 const POST_SCHEMA = "quick-post.v1";
 const CACHE_KEY = "quickPost.cache.v1";
+const HISTORY_KEY = "quickPost.history.v1";
 const CACHE_LIMIT = 30;
+const HISTORY_LIMIT = 500;
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const kind = message?.type === "GENERATE_REPLIES" ? message.context?.kind : "original-post";
@@ -11,7 +13,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     switch (message.type) {
       case "GENERATE_REPLIES": return generateReplies(message.context, source);
       case "GENERATE_POST_BATCH": return generatePostBatch(source, message.source);
-      case "LIST_POST_CACHE": return { ok: true, ...(await readCache()) };
+      case "LIST_POST_CACHE": return { ok: true, ...(await readCache()), historyCount: (await readHistory()).items.length };
       case "POST_CACHE_OP": return applyCacheOp(message);
     }
   }).then(sendResponse).catch((error) => {
@@ -115,21 +117,25 @@ async function generatePostBatch(source, board) {
   let cache = null;
   let cacheError = null;
   let evicted = 0;
+  let skippedCount = 0;
+  let historyCount = 0;
   try {
-    const appended = await appendCache(candidates, topics);
+    const appended = await appendCache(candidates, topics, fetched.source);
     cache = appended.items;
     evicted = appended.evicted;
+    skippedCount = appended.skippedCount;
+    historyCount = appended.historyCount;
   } catch (error) {
     // The batch itself is real and usable this session, but it must never be
     // presented as cached. Report the storage stage and keep the failure visible.
     cacheError = typeof error?.message === "string" ? error.message : "缓存写入失败（阶段 cache.write）";
   }
   return { ok: true, topics, candidates, decision: validDecision,
-    generation: generated.meta, cache, cacheError, evicted, source: fetched.source, fetchedAt: fetched.fetchedAt };
+    generation: generated.meta, cache, cacheError, evicted, skippedCount, historyCount, source: fetched.source, fetchedAt: fetched.fetchedAt };
 }
 
 async function loadSettings() {
-  return { ...DEFAULTS, ...(await chrome.storage.local.get(DEFAULTS)) };
+  return migrateSettings({ ...DEFAULTS, ...(await chrome.storage.local.get(DEFAULTS)) });
 }
 
 function gatewayBase(settings) {
@@ -151,6 +157,7 @@ function validateCacheItem(item) {
     || !Array.isArray(item.checkNotes) || item.checkNotes.length > 5
     || item.checkNotes.some((note) => typeof note !== "string" || !note.trim() || note.length > 120)
     || !item.sourceTopic || typeof item.sourceTopic.id !== "string" || typeof item.sourceTopic.title !== "string"
+    || (item.sourcePostId !== undefined && item.sourcePostId !== null && typeof item.sourcePostId !== "string")
     || typeof item.batchId !== "string" || !item.batchId
     || typeof item.createdAt !== "number" || !Number.isFinite(item.createdAt)
     || (item.usedAt !== undefined && item.usedAt !== null && (typeof item.usedAt !== "number" || !Number.isFinite(item.usedAt)))) {
@@ -180,21 +187,78 @@ async function writeCache(items) {
   }
 }
 
-async function appendCache(candidates, topics) {
+function normalizePostText(text) {
+  return text.normalize("NFC").trim().replace(/\s+/gu, " ");
+}
+
+async function hashText(text) {
+  if (!globalThis.crypto?.subtle) throw new Error("去重指纹计算不可用（阶段 cache.dedup）");
+  const bytes = new TextEncoder().encode(normalizePostText(text));
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function validateHistoryItem(item) {
+  if (!item || typeof item !== "object" || typeof item.textHash !== "string" || !/^[0-9a-f]{64}$/.test(item.textHash)
+    || (item.sourcePostId !== undefined && item.sourcePostId !== null && typeof item.sourcePostId !== "string")
+    || typeof item.firstSeenAt !== "number" || !Number.isFinite(item.firstSeenAt)) {
+    throw new Error("去重历史数据结构无效（阶段 cache.read）");
+  }
+}
+
+async function readHistory() {
+  let stored;
+  try { stored = await chrome.storage.local.get(HISTORY_KEY); }
+  catch (error) { throw new Error(`去重历史读取失败（阶段 cache.read）：${error?.message || "存储不可用"}`); }
+  const value = stored[HISTORY_KEY];
+  if (value === undefined) return { items: [] };
+  if (!value || typeof value !== "object" || !Array.isArray(value.items) || value.items.length > HISTORY_LIMIT) throw new Error("去重历史数据结构无效（阶段 cache.read）");
+  value.items.forEach(validateHistoryItem);
+  return { items: value.items };
+}
+
+async function writeCacheAndHistory(items, history) {
+  try { await chrome.storage.local.set({ [CACHE_KEY]: { items }, [HISTORY_KEY]: { items: history } }); }
+  catch (error) { throw new Error(`缓存写入失败（阶段 cache.write）：${error?.message || "存储不可用"}`); }
+}
+
+async function appendCache(candidates, topics, source) {
   const { items } = await readCache();
+  const historyValue = await readHistory();
+  const history = [...historyValue.items];
+  for (const item of items.filter((entry) => entry.usedAt)) {
+    const textHash = await hashText(item.text);
+    if (!history.some((entry) => entry.textHash === textHash)) {
+      history.push({ textHash, ...(item.sourcePostId ? { sourcePostId: item.sourcePostId } : {}), firstSeenAt: item.createdAt });
+    }
+  }
   const now = Date.now();
   const batchId = crypto.randomUUID();
-  const added = candidates.map((candidate) => {
+  const added = [];
+  let skippedCount = 0;
+  let historyCount = 0;
+  for (const candidate of candidates) {
     const topic = topics.find((entry) => entry.id === candidate.topicId);
-    return {
+    if (!topic) throw new Error("候选来源话题不存在（阶段 cache.dedup）");
+    const textHash = await hashText(candidate.text);
+    const sourcePostId = source === "xzhishu-tweets-hot" ? topic.id : null;
+    if (history.some((entry) => entry.textHash === textHash || (sourcePostId && entry.sourcePostId === sourcePostId))
+      || added.some((entry) => entry.textHash === textHash || (sourcePostId && entry.sourcePostId === sourcePostId))) {
+      skippedCount += 1;
+      continue;
+    }
+    added.push({
       id: crypto.randomUUID(),
       text: candidate.text,
       checkNotes: candidate.checkNotes,
       sourceTopic: { id: topic.id, title: topic.title },
+      ...(sourcePostId ? { sourcePostId } : {}),
       batchId,
       createdAt: now
-    };
-  });
+    });
+    history.push({ textHash, ...(sourcePostId ? { sourcePostId } : {}), firstSeenAt: now });
+  }
+  if (history.length > HISTORY_LIMIT) throw new Error(`去重历史已达到上限 ${HISTORY_LIMIT} 条，请先清除历史（阶段 cache.write）`);
   let merged = [...items, ...added];
   let evicted = 0;
   // 2026-10-24 review: when over the limit, delete items already used first,
@@ -206,8 +270,9 @@ async function appendCache(candidates, topics) {
     merged = merged.filter((item) => item !== victim);
     evicted += 1;
   }
-  await writeCache(merged);
-  return { items: merged, evicted };
+  await writeCacheAndHistory(merged, history);
+  historyCount = history.length;
+  return { items: merged, evicted, skippedCount, historyCount };
 }
 
 async function applyCacheOp(message) {
@@ -215,7 +280,10 @@ async function applyCacheOp(message) {
   const op = message?.op;
   const id = message?.id;
   let next = items;
-  if (op === "clear") {
+  if (op === "clear-history") {
+    await writeStorage({ [HISTORY_KEY]: { items: [] } });
+    return { ok: true, items, historyCount: 0 };
+  } else if (op === "clear") {
     next = [];
   } else if (op === "delete" || op === "mark" || op === "unmark") {
     if (typeof id !== "string" || !id) throw new Error("缓存操作缺少条目 ID（阶段 cache.write）");
@@ -232,6 +300,11 @@ async function applyCacheOp(message) {
   }
   await writeCache(next);
   return { ok: true, items: next };
+}
+
+async function writeStorage(entries) {
+  try { await chrome.storage.local.set(entries); }
+  catch (error) { throw new Error(`缓存写入失败（阶段 cache.write）：${error?.message || "存储不可用"}`); }
 }
 
 async function postJson(url, body, timeoutMs) {
