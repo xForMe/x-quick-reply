@@ -6,7 +6,7 @@ const fs=require('node:fs');
 const path=require('node:path');
 const {JSDOM}=require('jsdom');
 const {installClipboard}=require('./clipboard-fixture.cjs');
-const wait=()=>new Promise(resolve=>setTimeout(resolve,190));
+const wait=()=>new Promise(resolve=>setTimeout(resolve,400));
 
 test('controlled Draft editor receives each candidate once and replaces its own draft',async()=>{
   const dom=new JSDOM('<body><div role="dialog"><article data-testid="tweet"><div data-testid="tweetText">合成测试帖子</div></article><div id="mount"></div></div></body>',{url:'https://x.com/compose/post',runScripts:'outside-only',pretendToBeVisual:true});
@@ -32,7 +32,7 @@ test('controlled Draft editor receives each candidate once and replaces its own 
   Object.defineProperty(w.HTMLElement.prototype,'contentEditable',{get(){return this.getAttribute('contenteditable')||'inherit';}});
   w.scrollTo=()=>{};
   installClipboard(w);
-  w.chrome={runtime:{onMessage:{addListener(){},removeListener(){}},async sendMessage(){return {ok:true,candidates:[{id:'c1',text:'第一条合成回复。'},{id:'c2',text:'另一条合成回复。'}],decision:{selectedId:'c1',confidence:1,reviewRequired:false}};}}};
+  w.chrome={runtime:{onMessage:{addListener(){},removeListener(){}},async sendMessage(){return {ok:true,candidates:[{id:'c1',text:'第一条合成回复。'},{id:'c2',text:'另一条合成回复。'}],decision:{selectedId:'c1',confidence:1,reviewRequired:false}};}},storage:{local:{async get(){return {oneClickReply:false,autoLikeAfterReply:false};}}}};
   let pastes=0,nativeWrites=0;
   w.document.addEventListener('paste',()=>pastes++,true);
   w.document.execCommand=()=>{nativeWrites++;throw Error('Native DOM insertion must not bypass the controlled editor');};

@@ -12,7 +12,7 @@ const reactRuntime = [
 const source = `${reactRuntime}\n${fs.readFileSync(path.join(__dirname, '../extension/src/content.js'), 'utf8')}`;
 const post = (id, text) => `<article data-testid="tweet"><a href="/someone/status/${id}"><time>now</time></a><div data-testid="tweetText">${text}</div></article>`;
 const editor = '<div data-testid="tweetTextarea_0" role="textbox" contenteditable="true"></div>';
-function app({html = `<div role="dialog">${post('123', '一起讨论这个想法？')}${editor}<button data-testid="tweetButton">Reply</button></div>`, url = 'https://x.com/compose/post', response, trustedTypes = false, pasteHandler, pendingLikeMarker, pendingLikeRaw} = {}) {
+function app({html = `<div role="dialog">${post('123', '一起讨论这个想法？')}${editor}<button data-testid="tweetButton">Reply</button></div>`, url = 'https://x.com/compose/post', response, trustedTypes = false, pasteHandler, pendingLikeMarker, pendingLikeRaw, oneClickReply = false, oneClickCountdownSeconds = 10, trustedClicks = false} = {}) {
   const dom = new JSDOM(`<body>${html}</body>`, {url, runScripts:'outside-only', pretendToBeVisual:true});
   const w = dom.window, calls = [];
   let now = Date.now();
@@ -23,11 +23,20 @@ function app({html = `<div role="dialog">${post('123', '一起讨论这个想法
   w.setInterval = fn => {intervals.push(fn);return intervals.length;};
   w.clearInterval = id => {intervals[id - 1] = null;};
   w.Element.prototype.getClientRects = function () { return this.closest('[hidden]') ? [] : [{}]; };
+  const storage={async get(){return {oneClickReply,oneClickCountdownSeconds,autoLikeAfterReply:false};}};
+  if (trustedClicks) {
+    // Test-only stand-in for a real user click: jsdom cannot dispatch trusted events,
+    // so document click listeners receive the same event with isTrusted forced true.
+    const add=w.document.addEventListener.bind(w.document), remove=w.document.removeEventListener.bind(w.document), wrapped=new Map();
+    const trust=event=>new Proxy(event,{get:(target,key)=>key==='isTrusted'?true:(typeof target[key]==='function'?target[key].bind(target):target[key])});
+    w.document.addEventListener=(type,fn,options)=>{if(type!=='click')return add(type,fn,options);const listener=event=>fn(trust(event));wrapped.set(fn,listener);return add(type,listener,options);};
+    w.document.removeEventListener=(type,fn,options)=>remove(type,type==='click'&&wrapped.has(fn)?wrapped.get(fn):fn,options);
+  }
   w.chrome = {runtime:{onMessage:{addListener(fn){messageListener=fn;listenerCount++;},removeListener(fn){if(messageListener===fn) {messageListener=null;listenerCount--;}}}, async sendMessage(message) {
     calls.push(message);
     if (response) return response(message);
     return {ok:true, candidates:[{id:'c1',text:'你最想先讨论哪一部分？'},{id:'c2',text:'可以具体说说你的想法吗？'}], decision:{selectedId:'c1',reviewRequired:false,confidence:0.8}};
-  }}};
+  }},storage:{local:storage}};
   installClipboard(w);
   // Minimal editor substitute. Actual Draft.js integration is tested separately.
   w.document.addEventListener('paste', event => {
@@ -56,8 +65,8 @@ function app({html = `<div role="dialog">${post('123', '一起讨论这个想法
   const boot = w.eval(source);
   return {w, calls, panel:()=>w.document.getElementById('quick-reply-panel'),
     status:()=>w.document.querySelector('[data-role="status"]').textContent,
-    async generate(){w.document.querySelector('[data-action="generate"]').click(); await new Promise(resolve=>setTimeout(resolve,180));},
-    open(){let result; messageListener({type:'OPEN_QUICK_REPLY'}, {id:'test'}, r=>result=r);return result;},
+    async generate(){await new Promise(resolve=>setTimeout(resolve,0));w.document.querySelector('[data-action="generate"]').click(); await new Promise(resolve=>setTimeout(resolve,180));},
+    open(type='OPEN_QUICK_REPLY'){let result; messageListener({type}, {id:'test'}, r=>result=r);return result;},
     boot, tick(ms=0){now += ms; intervals.filter(Boolean).forEach(fn=>fn());},reinject(){return w.eval(source);},listenerCount(){return listenerCount;},
     close(){Object.defineProperty(w.Element.prototype,'innerHTML',htmlDescriptor);w.close();}};
 }
@@ -73,6 +82,270 @@ test('public reply dialog reads only its target and fills selected candidate wit
     assert.equal(a.w.document.querySelector('[role="textbox"]').textContent,'你最想先讨论哪一部分？');
     assert.equal(sent,0);
     assert.match(a.status(),/已回填/);
+  } finally {a.close();}
+});
+
+// v2: only a trusted click on X's reply control auto-sends, after a countdown.
+const timeline = (id='123', text='一起讨论这个想法？') => `<article data-testid="tweet"><a href="/someone/status/${id}"><time>now</time></a><div data-testid="tweetText">${text}</div><button data-testid="reply">Reply</button></article>`;
+const flush = (ms=0) => new Promise(resolve=>setTimeout(resolve,ms));
+const oneClickResponse = (extra={}) => () => ({ok:true,oneClickReply:true,oneClickCountdownSeconds:10,candidates:[{id:'c1',text:'先聊这个。'},{id:'c2',text:'可以具体说说。'}],decision:{selectedId:'c1',reviewRequired:false,confidence:0.8},...extra});
+function autoApp(options={}) {
+  const a=app({html:timeline(),url:'https://x.com/home',oneClickReply:true,trustedClicks:true,response:oneClickResponse(),...options});
+  const sends=[];
+  a.openReply=async()=>{
+    a.w.document.querySelector('[data-testid="reply"]').click();
+    await flush();
+    const dialog=a.w.document.createElement('div'); dialog.setAttribute('role','dialog');
+    dialog.innerHTML=`${post('123','一起讨论这个想法？')}${editor}<button data-testid="tweetButton">Reply</button>`;
+    a.w.document.body.append(dialog);
+    dialog.querySelector('[data-testid="tweetButton"]').onclick=()=>{sends.push(a.editor().textContent);a.editor().textContent='';};
+    a.tick();
+    await flush(200);
+  };
+  a.editor=()=>a.w.document.querySelector('[role="dialog"] [role="textbox"]');
+  a.sends=sends;
+  a.countdown=()=>a.w.document.querySelector('[data-role="countdown"]');
+  return a;
+}
+
+test('trusted reply click auto-generates, fills the selected candidate and sends once after the countdown', async () => {
+  const a=autoApp();
+  try {
+    await a.openReply();
+    assert.equal(a.calls.length,1);
+    assert.equal(a.editor().textContent,'先聊这个。');
+    assert.ok(a.countdown(),a.status());
+    assert.equal(a.w.document.querySelector('[data-role="countdown-seconds"]').textContent,'10');
+    assert.match(a.status(),/将在 10 秒后发送/);
+    a.tick(9999);
+    assert.deepEqual(a.sends,[]);
+    a.tick(1);
+    assert.deepEqual(a.sends,['先聊这个。']);
+    a.tick(100);
+    assert.match(a.status(),/回复已发送/);
+    a.tick(20000);
+    assert.equal(a.sends.length,1);
+    assert.equal(a.calls.length,1);
+  } finally {a.close();}
+});
+
+test('the configured countdown length is used', async () => {
+  const a=autoApp({oneClickCountdownSeconds:3,response:oneClickResponse({oneClickCountdownSeconds:3})});
+  try {
+    await a.openReply();
+    assert.equal(a.w.document.querySelector('[data-role="countdown-seconds"]').textContent,'3');
+    a.tick(2999); assert.equal(a.sends.length,0);
+    a.tick(1); assert.equal(a.sends.length,1);
+  } finally {a.close();}
+});
+
+test('untrusted reply clicks, a disabled switch, or an expired trigger never auto-generate', async () => {
+  const untrusted=autoApp({trustedClicks:false});
+  try { await untrusted.openReply(); assert.equal(untrusted.calls.length,0); assert.equal(untrusted.countdown(),null); } finally {untrusted.close();}
+  const off=autoApp({oneClickReply:false});
+  try { await off.openReply(); assert.equal(off.calls.length,0); assert.equal(off.editor().textContent,''); } finally {off.close();}
+  const late=autoApp();
+  try {
+    late.w.document.querySelector('[data-testid="reply"]').click();
+    await flush();
+    late.tick(5001);
+    const dialog=late.w.document.createElement('div'); dialog.setAttribute('role','dialog');
+    dialog.innerHTML=`${post('123','一起讨论这个想法？')}${editor}`;
+    late.w.document.body.append(dialog);
+    late.tick(); await flush(200);
+    assert.equal(late.calls.length,0);
+  } finally {late.close();}
+});
+
+test('opening a reply dialog without a reply-button click does not auto-generate', async () => {
+  const a=app({url:'https://x.com/compose/post',oneClickReply:true,trustedClicks:true,response:oneClickResponse()});
+  try { a.tick(); await flush(200); assert.equal(a.calls.length,0); } finally {a.close();}
+});
+
+test('invalid stored countdown stops before generation', async () => {
+  for (const value of [2,61,2.5,'10',null]) {
+    const a=autoApp({oneClickCountdownSeconds:value});
+    try { await a.openReply(); assert.equal(a.calls.length,0); assert.match(a.status(),/倒计时设置无效/); } finally {a.close();}
+  }
+});
+
+test('cancel during the countdown keeps the draft and never sends', async () => {
+  const a=autoApp();
+  try {
+    await a.openReply();
+    a.w.document.querySelector('[data-action="cancel-send"]').click();
+    a.tick(20000);
+    assert.equal(a.sends.length,0);
+    assert.equal(a.editor().textContent,'先聊这个。');
+    assert.match(a.status(),/已取消自动发送/);
+    assert.equal(a.countdown(),null);
+  } finally {a.close();}
+});
+
+test('send-now sends immediately and only once', async () => {
+  const a=autoApp();
+  try {
+    await a.openReply();
+    a.w.document.querySelector('[data-action="send-now"]').click();
+    assert.deepEqual(a.sends,['先聊这个。']);
+    a.tick(20000);
+    assert.equal(a.sends.length,1);
+  } finally {a.close();}
+});
+
+test('editing the draft, closing the dialog, closing the panel or changing route cancels the send', async () => {
+  const cases={
+    edit:a=>{a.editor().textContent='我自己改一下';a.editor().dispatchEvent(new a.w.Event('input',{bubbles:true}));},
+    dialog:a=>{a.w.document.querySelector('[role="dialog"]').remove();},
+    panel:a=>{a.w.document.querySelector('[data-action="close"]').click();},
+    route:a=>{a.w.history.pushState({},'', '/someone/status/999');}
+  };
+  for (const [name,act] of Object.entries(cases)) {
+    const a=autoApp();
+    try {
+      await a.openReply();
+      act(a);
+      a.tick(); a.tick(20000);
+      assert.equal(a.sends.length,0,name);
+      assert.match(a.status(),/已取消自动发送/,name);
+    } finally {a.close();}
+  }
+});
+
+test('a hidden tab keeps counting down and still sends once', async () => {
+  const a=autoApp();
+  try {
+    await a.openReply();
+    Object.defineProperty(a.w.document,'visibilityState',{value:'hidden',configurable:true});
+    Object.defineProperty(a.w.document,'hidden',{value:true,configurable:true});
+    a.w.document.dispatchEvent(new a.w.Event('visibilitychange'));
+    a.tick(10000);
+    assert.deepEqual(a.sends,['先聊这个。']);
+  } finally {a.close();}
+});
+
+test('choosing another candidate during the countdown replaces the draft and sends it immediately', async () => {
+  const a=autoApp();
+  try {
+    await a.openReply();
+    a.w.document.querySelector('[data-candidate="c2"]').click();
+    await flush(200);
+    assert.deepEqual(a.sends,['可以具体说说。']);
+    a.tick(20000);
+    assert.equal(a.sends.length,1);
+  } finally {a.close();}
+});
+
+test('abstention after an auto trigger never fills or sends', async () => {
+  const a=autoApp({response:oneClickResponse({decision:{selectedId:null,reviewRequired:true,confidence:0.2}})});
+  try {
+    await a.openReply();
+    a.tick(20000);
+    assert.equal(a.editor().textContent,'');
+    assert.equal(a.sends.length,0);
+    assert.match(a.status(),/未选择合适回复，未发送/);
+  } finally {a.close();}
+});
+
+test('auto-sent reply hands confirmation to auto-like when it is enabled', async () => {
+  const a=autoApp({response:oneClickResponse({autoLikeAfterReply:true})});
+  try {
+    await a.openReply();
+    a.tick(10000);
+    assert.equal(a.sends.length,1);
+    assert.match(a.status(),/点赞/);
+  } finally {a.close();}
+});
+
+// Real X changes the URL to /compose/post when the reply dialog opens; the
+// route poll may notice that only after the new generation has started.
+function openReplyLikeX(a, id, text) {
+  a.w.document.querySelector(`[data-reply-for="${id}"]`).click();
+  a.w.history.pushState({},'', '/compose/post');
+  const dialog=a.w.document.createElement('div'); dialog.setAttribute('role','dialog');
+  dialog.innerHTML=`${post(id,text)}${editor}<button data-testid="tweetButton">Reply</button>`;
+  a.w.document.body.append(dialog);
+  dialog.querySelector('[data-testid="tweetButton"]').onclick=()=>{
+    a.sends.push(dialog.querySelector('[role="textbox"]').textContent);
+    dialog.remove();
+    a.w.history.pushState({},'', '/home');
+  };
+}
+const twoPosts = () => ['123','456'].map(id => timeline(id, `帖子${id}`).replace('data-testid="reply"', `data-testid="reply" data-reply-for="${id}"`)).join('');
+
+test('a generation started before the route poll notices /compose/post is not cancelled as stale', async () => {
+  const a=autoApp({html:twoPosts()});
+  try {
+    openReplyLikeX(a,'123','帖子123');
+    await flush(200);
+    a.tick();
+    await flush(200);
+    assert.doesNotMatch(a.status(),/页面已切换/);
+    assert.ok(a.countdown(),a.status());
+    a.tick(10000);
+    assert.deepEqual(a.sends,['先聊这个。']);
+  } finally {a.close();}
+});
+
+test('a second reply after a completed auto-send starts cleanly', async () => {
+  const a=autoApp({html:twoPosts()});
+  try {
+    openReplyLikeX(a,'123','帖子123');
+    await flush(200); a.tick(); await flush(200);
+    a.tick(10000); a.tick(100); a.tick(500);
+    assert.equal(a.sends.length,1,a.status());
+    openReplyLikeX(a,'456','帖子456');
+    await flush(200); a.tick(); await flush(200);
+    assert.doesNotMatch(a.status(),/页面已切换/);
+    assert.equal(a.calls.length,2);
+    assert.ok(a.countdown(),a.status());
+    a.tick(10000);
+    assert.equal(a.sends.length,2);
+  } finally {a.close();}
+});
+
+test('a second reply after auto-send plus auto-like starts cleanly', async () => {
+  const a=autoApp({html:twoPosts(),response:oneClickResponse({autoLikeAfterReply:true})});
+  try {
+    for (const tweet of a.w.document.querySelectorAll('[data-testid="tweet"]')) {
+      const like=a.w.document.createElement('button'); like.dataset.testid='like'; like.setAttribute('aria-label','Like');
+      like.onclick=()=>{like.dataset.testid='unlike';like.setAttribute('aria-label','Liked');};
+      tweet.append(like);
+    }
+    openReplyLikeX(a,'123','帖子123');
+    await flush(200); a.tick(); await flush(200);
+    a.tick(10000); a.tick(100); a.tick(4001); a.tick(100);
+    assert.equal(a.sends.length,1);
+    assert.match(a.status(),/已自动点赞/);
+    openReplyLikeX(a,'456','帖子456');
+    await flush(200); a.tick(); await flush(200);
+    assert.doesNotMatch(a.status(),/页面已切换/);
+    assert.equal(a.calls.length,2);
+    assert.ok(a.countdown(),a.status());
+  } finally {a.close();}
+});
+
+test('panel button fills only, even with one-click enabled', async () => {
+  const a=app({oneClickReply:true,trustedClicks:true,response:oneClickResponse()});
+  try {
+    let sent=0; a.w.document.querySelector('[data-testid="tweetButton"]').onclick=()=>sent++;
+    assert.equal(a.w.document.querySelector('[data-action="generate"]').textContent,'生成并填入回复');
+    await a.generate();
+    a.tick(20000);
+    assert.equal(sent,0);
+    assert.equal(a.w.document.querySelector('[role="textbox"]').textContent,'先聊这个。');
+    assert.match(a.status(),/手动发送/);
+  } finally {a.close();}
+});
+
+test('one-click setting does not auto-send private messages', async () => {
+  const html='<div data-testid="DMConversation"><div data-testid="messageEntry">明天几点聊？</div><div data-testid="dmComposerTextInput" role="textbox" contenteditable="true"></div><button data-testid="tweetButton">发送</button></div>';
+  const a=app({html,url:'https://x.com/messages/123',oneClickReply:true,response:()=>({ok:true,oneClickReply:true,candidates:[{id:'c1',text:'明天下午。'},{id:'c2',text:'晚点确认。'}],decision:{selectedId:'c1',reviewRequired:false,confidence:0.8}})});
+  try {
+    let sent=0;a.w.document.querySelector('[data-testid="tweetButton"]').onclick=()=>sent++;
+    await a.generate();
+    assert.equal(sent,0);
+    assert.match(a.status(),/手动发送|已回填/);
   } finally {a.close();}
 });
 
@@ -667,9 +940,17 @@ test('repeated explicit initialization keeps one panel and one live listener', (
 });
 
 test('blank post and quote composers never borrow a post from the background', async () => {
-  for(const html of [`${post('999','background')}<div role="dialog">${editor}</div>`, `<div role="dialog">${editor}${post('123','quote')}</div>`]) {
-    const a=app({html}); try { await a.generate(); assert.equal(a.calls.length,0); assert.match(a.status(),/回复|目标/); } finally{a.close();}
-  }
+  // A compose dialog without a target post is the post scene: the reply panel
+  // is not shown there, so nothing can borrow the background post.
+  const compose = app({ html: `${post('999', 'background')}<div role="dialog">${editor}</div>` });
+  try {
+    assert.ok(compose.panel().querySelector('[data-action="post-batch"]'), compose.status());
+    assert.equal(compose.panel().querySelector('[data-action="generate"]'), null);
+    assert.equal(compose.calls.length, 0);
+  } finally { compose.close(); }
+  // A quote composer (editor before the quoted post) is still rejected by the reply flow.
+  const quote = app({ html: `<div role="dialog">${editor}${post('123', 'quote')}</div>` });
+  try { await quote.generate(); assert.equal(quote.calls.length, 0); assert.match(quote.status(), /回复|目标/); } finally { quote.close(); }
 });
 
 test('nonempty draft stops before network, preserving user text', async () => {
@@ -718,4 +999,114 @@ test('toolbar reopens a closed panel and SPA navigation discovers reply dialog',
     assert.equal(a.open().ok,true); assert.equal(a.panel().hidden,false);
     await a.generate(); assert.equal(a.calls.length,1);
   }finally{a.close();}
+});
+
+// ---- quick-post 发帖模式（合成 DOM；不代表真实 X 发帖框已验证）----
+const composeEditor = '<div data-testid="tweetTextarea_0" role="textbox" contenteditable="true"></div>';
+const cacheItem = (id, text, used) => ({ id, text, checkNotes: ['发布前核实：机制属实'],
+  sourceTopic: { id: 't3', title: '话题三' }, batchId: 'b1', createdAt: 1000, ...(used ? { usedAt: 2000 } : {}) });
+
+function postApp({ items = [cacheItem('k1', '帖文一：你会怎么选？四选一。'), cacheItem('k2', '帖文二：说说你的边界。')], batchResponse } = {}) {
+  return app({
+    html: `<div role="dialog">${composeEditor}<button data-testid="tweetButton">Post</button></div>`,
+    url: 'https://x.com/compose/post',
+    response: (message) => {
+      if (message.type === 'LIST_POST_CACHE') return { ok: true, items };
+      if (message.type === 'GENERATE_POST_BATCH') return batchResponse || { ok: true,
+        topics: [{ id: 't3', rank: 1, title: '话题三', summary: '摘要三。', tags: [], repliesCount: 30 }],
+        decision: { selectedId: 'c1', reviewRequired: false, confidence: 0.7 },
+        cache: items, cacheError: null, evicted: 0, source: 'xzhishu-tweets-hot',
+        candidates: items.map((item, i) => ({ id: `c${i + 1}`, topicId: 't3', text: item.text, checkNotes: item.checkNotes })) };
+      if (message.type === 'POST_CACHE_OP') {
+        return { ok: true, items: items.map((item) => item.id === message.id && message.op === 'mark'
+          ? { ...item, usedAt: 3000 } : item) };
+      }
+      return { ok: true };
+    }
+  });
+}
+
+test('post mode fills one cached candidate into the compose box without sending', async () => {
+  const a = postApp();
+  try {
+    assert.equal(a.open('OPEN_QUICK_POST').ok, true, a.status());
+    await new Promise(resolve => setTimeout(resolve, 20));
+    assert.ok(a.panel().querySelector('[data-action="post-batch"]'), '发帖场景只显示发帖面板');
+    assert.equal(a.panel().querySelector('[data-action="generate"]'), null, '发帖面板不混入回复组件');
+    // Posts are grouped under their source topic instead of one flat list.
+    assert.ok(a.panel().querySelector('[data-topic-group="t3"]'), '需要按话题分组');
+    assert.match(a.panel().querySelector('.qr-topic-head').textContent, /话题三/);
+    const fillButtons = a.panel().querySelectorAll('[data-action="post-fill"]');
+    assert.equal(fillButtons.length, 2);
+    let sent = 0;
+    a.w.document.querySelector('[data-testid="tweetButton"]').onclick = () => sent++;
+    fillButtons[0].click();
+    await new Promise(resolve => setTimeout(resolve, 600));
+    assert.equal(a.w.document.querySelector('[role="textbox"]').textContent, '帖文一：你会怎么选？四选一。');
+    assert.equal(sent, 0);
+    assert.match(a.status(), /已填入发帖框草稿/);
+    assert.ok(a.calls.some((message) => message.type === 'POST_CACHE_OP' && message.op === 'mark' && message.id === 'k1'));
+  } finally { a.close(); }
+});
+
+test('switching to another cached candidate swaps the draft and returns the previous one', async () => {
+  const a = postApp();
+  try {
+    a.open('OPEN_QUICK_POST');
+    await new Promise(resolve => setTimeout(resolve, 20));
+    a.panel().querySelectorAll('[data-action="post-fill"]')[0].click();
+    await new Promise(resolve => setTimeout(resolve, 600));
+    // k1 is now marked as used, so the remaining fill button belongs to k2.
+    const remaining = a.panel().querySelectorAll('[data-action="post-fill"]');
+    assert.equal(remaining.length, 1);
+    remaining[0].click();
+    await new Promise(resolve => setTimeout(resolve, 600));
+    assert.equal(a.w.document.querySelector('[role="textbox"]').textContent, '帖文二：说说你的边界。');
+    const ops = a.calls.filter((message) => message.type === 'POST_CACHE_OP').map((message) => message.op);
+    assert.deepEqual(ops, ['mark', 'unmark', 'mark']);
+    assert.equal(a.calls.filter((message) => message.type === 'POST_CACHE_OP' && message.op === 'unmark')[0].id, 'k1');
+  } finally { a.close(); }
+});
+
+test('post batch loads the cache pool and never presents used items as fillable', async () => {
+  const a = postApp({ items: [cacheItem('k1', '帖文一：你会怎么选？四选一。', true)] });
+  try {
+    a.open('OPEN_QUICK_POST');
+    await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(a.panel().querySelectorAll('[data-action="post-fill"]').length, 0);
+    assert.match(a.panel().querySelector('[data-role="cache"]').textContent, /已发过/);
+    a.w.document.querySelector('[data-action="post-batch"]').click();
+    await new Promise(resolve => setTimeout(resolve, 20));
+    assert.ok(a.calls.some((message) => message.type === 'GENERATE_POST_BATCH'));
+  } finally { a.close(); }
+});
+
+test('reply and post entries refuse the wrong scene instead of opening a mixed panel', async () => {
+  const compose = postApp();
+  try {
+    const wrong = compose.open('OPEN_QUICK_REPLY');
+    assert.equal(wrong.ok, false);
+    assert.match(wrong.error, /发帖助手|发帖场景/);
+  } finally { compose.close(); }
+  const a = app();
+  try {
+    const wrong = a.open('OPEN_QUICK_POST');
+    assert.equal(wrong.ok, false);
+    assert.match(wrong.error, /发帖弹窗|compose/);
+  } finally { a.close(); }
+});
+
+test('the panel offers the hot tweets board as an explicit second action', async () => {
+  const a = postApp();
+  try {
+    a.open('OPEN_QUICK_POST');
+    await new Promise(resolve => setTimeout(resolve, 20));
+    const ghost = a.panel().querySelector('[data-action="post-batch-tweets"]');
+    assert.ok(ghost, '需要显式的热门推文榜入口');
+    assert.match(ghost.textContent, /热门推文榜/);
+    ghost.click();
+    await new Promise(resolve => setTimeout(resolve, 20));
+    const batch = a.calls.find((message) => message.type === 'GENERATE_POST_BATCH');
+    assert.equal(batch.source, 'tweets');
+  } finally { a.close(); }
 });

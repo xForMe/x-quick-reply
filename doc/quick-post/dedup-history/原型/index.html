@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>快速发帖｜历史去重原型</title>
+<style>
+  :root{font:14px system-ui;color:#182235;background:#f4f6fa}body{margin:0;padding:32px}.panel{max-width:760px;margin:auto;background:#fff;border:1px solid #dce2ea;border-radius:18px;box-shadow:0 12px 40px #18223512;overflow:hidden}.head{display:flex;justify-content:space-between;padding:20px 24px;border-bottom:1px solid #edf0f4}.head strong{font-size:18px}.body{padding:22px 24px}.status{padding:12px 14px;border-radius:10px;background:#eef7ee;color:#216b36;margin:14px 0}.status.warn{background:#fff5dd;color:#8b5a11}.row{display:flex;justify-content:space-between;align-items:center;gap:12px}.muted{color:#667085;font-size:12px}.button{border:1px solid #d8deea;background:#fff;border-radius:9px;padding:8px 12px;font-weight:700}.danger{color:#b42318;border-color:#f2c6c1}.card{border:1px solid #dce2ea;border-radius:12px;padding:14px;margin-top:12px}.card.used{opacity:.6;background:#f7f8fa}.tag{display:inline-block;border-radius:7px;padding:4px 7px;background:#f0eaff;color:#5123b5;font-size:11px;font-weight:800}.tag.skip{background:#fff5dd;color:#8b5a11}.text{margin:10px 0;line-height:1.6}.actions{display:flex;gap:8px}.state{display:none}.state:target{display:block}.nav{display:flex;gap:8px;margin-bottom:16px}.nav a{color:#5123b5;text-decoration:none;font-weight:700}
+</style>
+<div class="panel">
+  <div class="head"><strong>快速发帖</strong><span class="muted">历史去重原型</span></div>
+  <div class="body">
+    <div class="nav"><a href="#success">成功态</a><a href="#empty">全批重复</a><a href="#error">失败态</a></div>
+    <section id="success" class="state">
+      <div class="row"><div><b>候选缓存池 · 2 条</b><div class="muted">历史去重：已记录 18 条</div></div><button class="button danger">清除去重历史</button></div>
+      <div class="status">本批新增 2 条，跳过 1 条历史重复。未自动重试或换源。</div>
+      <div class="card"><span class="tag">可选候选</span><div class="text">你最近观察到的一个变化是什么？</div><div class="muted">来源：AI · 2026/10/24 18:20</div><div class="actions"><button class="button">填入草稿</button><button class="button">删除</button></div></div>
+      <div class="card used"><span class="tag">已填入草稿</span><div class="text">一个具体的小问题，往往比宏大口号更值得讨论。</div><div class="muted">已用标记保留；删除或放回也不会解除历史去重</div></div>
+    </section>
+    <section id="empty" class="state"><div class="status warn">本批 3 条候选全部命中历史去重，未新增缓存。未自动重试、换源或切换模型。</div><p class="muted">可清除去重历史后重新生成，但这会允许相同正文再次进入缓存。</p><button class="button danger">清除去重历史</button></section>
+    <section id="error" class="state"><div class="status" style="background:#fff0f0;color:#b42318">缓存读取失败（阶段 cache.read）：无法读取历史去重记录。已停止入池。</div><button class="button">复制排查信息</button></section>
+  </div>
+</div>
+</html>

@@ -25,6 +25,39 @@ body:
       description: 说明适用的 X 页面、输入内容和不应触发的情况
 
   - type: textarea
+    id: prototype
+    attributes:
+      label: 原型设计
+      description: 提供工作区高保真 HTML 原型路径或可访问链接，并说明覆盖的页面、交互和状态；没有原型请填写“待补齐”及原因
+      placeholder: |
+        路径/链接：doc/<需求标识>/原型/index.html
+        覆盖：主流程、空态、加载中、失败、成功
+        评审状态：待评审
+    validations:
+      required: true
+
+  - type: textarea
+    id: technical
+    attributes:
+      label: 技术方案
+      description: 提供技术方案路径或可访问链接，并摘要说明模块边界、接口/数据契约、权限隐私、失败停止条件和待验证事项；Issue 用于讨论，完整方案仍以技术.md 为基线
+      placeholder: |
+        路径/链接：doc/<需求标识>/技术.md
+        方案摘要：
+        待验证事项：
+        评审状态：待评审
+    validations:
+      required: true
+
+  - type: textarea
+    id: design_decisions
+    attributes:
+      label: 需要评审的设计决策
+      description: 列出需要确认的交互、范围、数据、权限或验收问题；Issue 结论必须回写需求目录文档
+    validations:
+      required: true
+
+  - type: textarea
     id: acceptance
     attributes:
       label: 验收标准

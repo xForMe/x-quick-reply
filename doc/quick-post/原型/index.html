@@ -1,0 +1,451 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>快速发帖 · quick-post 原型 v5</title>
+<style>
+:root{--bg:#0b1322;--line:#2a3d5c;--text:#edf4ff;--muted:#9eb0c9;--blue:#5ea7ff;--green:#55d49b;--orange:#ffbf69;--red:#ff8b91}
+*{box-sizing:border-box}
+body{margin:0;background:radial-gradient(circle at 75% 0,#16335a 0,var(--bg) 45%);color:var(--text);font:14px/1.5 Inter,ui-sans-serif,system-ui,"Microsoft YaHei",sans-serif}
+button{font:inherit;cursor:pointer}
+.main{max-width:1240px;margin:auto;padding:28px 32px 48px}
+.eyebrow{color:var(--blue);font-size:12px;font-weight:700;letter-spacing:.12em}
+h1{margin:4px 0 6px;font-size:28px;letter-spacing:-.02em}
+.sub{margin:0;color:var(--muted)}
+.top{display:flex;justify-content:space-between;gap:16px;align-items:flex-start}
+.badge{padding:6px 11px;border:1px solid #365b84;border-radius:99px;color:#a9d2ff;background:#102746;font-size:12px;white-space:nowrap}
+.grid{display:grid;grid-template-columns:360px minmax(0,1fr);gap:22px;margin-top:24px}
+.card{background:linear-gradient(180deg,#14243a,#101c2e);border:1px solid var(--line);border-radius:16px}
+.card h2{font-size:15px;margin:0;padding:16px 18px;border-bottom:1px solid var(--line)}
+.card .body{padding:16px 18px}
+.row{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;padding:12px 0;border-top:1px solid #243652}
+.row:first-child{border-top:0;padding-top:0}
+.row-title{font-weight:650}.row-copy{color:var(--muted);font-size:12px;margin-top:2px}
+.tools{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.tools button{border:1px solid #426183;background:#172b47;color:#cde2ff;border-radius:8px;padding:6px 9px;font-size:12px}
+.tools button.on{border-color:#69b9ff;background:#1d3c63;color:#fff}
+.kv{font-size:12px;color:#cfe0f6}
+.kv b{color:#eaf3ff}
+pre{margin:8px 0 0;padding:10px;border-radius:10px;background:#0d1a2c;border:1px solid #2a3d5c;color:#b9d7fa;font-size:11.5px;white-space:pre-wrap}
+/* X 模拟页 */
+.x{position:relative;background:#f3f6f9;color:#0f1419;border-radius:16px;overflow:hidden;border:1px solid #c3d0df;min-height:760px}
+.xbar{padding:12px 18px;background:#fff;border-bottom:1px solid #e1e8ed;display:flex;justify-content:space-between;font-weight:800}
+.xbar small{font-weight:400;color:#536471}
+.compose{background:#fff;margin:0;padding:16px 18px;border-bottom:1px solid #e1e8ed}
+.th{display:flex;gap:10px;align-items:center}.av{width:38px;height:38px;border-radius:50%;background:linear-gradient(135deg,#5b9cff,#f08ab0)}
+.name{font-weight:700}.handle{color:#536471;font-size:13px}
+.ed{width:100%;min-height:96px;border:0;resize:none;font-size:17px;padding:10px 0 6px 48px;outline:none;color:#0f1419;background:transparent;font-family:inherit}
+.ed::placeholder{color:#536471}
+.drow{display:flex;justify-content:flex-end;align-items:center;gap:12px;margin-top:10px}
+.hint{color:#536471;font-size:12px}
+.send{border:0;border-radius:99px;padding:7px 18px;background:#1d9bf0;color:#fff;font-weight:700}
+.send:disabled{opacity:.5}
+/* 扩展面板 */
+.panel{position:absolute;right:14px;bottom:14px;width:366px;max-height:96%;overflow:auto;background:#10213a;color:#f1f6ff;border:1px solid #355274;border-radius:13px;padding:12px;box-shadow:0 12px 30px #0006;z-index:5}
+.ptop{display:flex;justify-content:space-between;align-items:center}
+.pt{font-weight:700}.pv{font-size:11px;color:#8faad0}
+.modes{display:flex;gap:6px;margin:10px 0 2px}
+.modes button{flex:1;border:1px solid #3d5b7e;background:#162b48;color:#9eb0c9;border-radius:8px;padding:6px;font-size:12px}
+.modes button.on{border-color:#69b9ff;background:#1d3c63;color:#fff;font-weight:700}
+.steps{margin:10px 0 0;font-size:11px;color:#8faad0}
+.steps b{color:#9ef0c6}
+.status{margin:10px 0;padding:8px 10px;border-radius:8px;background:#1b3351;color:#b9d7fa;font-size:12px}
+.status.error{background:#3a1d24;color:#ffb3b8}.status.success{background:#163a2c;color:#9ef0c6}
+.primary{width:100%;border:0;border-radius:9px;padding:9px;background:#398fe8;color:#fff;font-weight:700}
+.primary:disabled{opacity:.55;cursor:default}
+.ghost{width:100%;margin-top:8px;border:1px solid #426183;background:#172b47;color:#cde2ff;border-radius:8px;padding:7px;font-size:12px}
+.phead{display:flex;justify-content:space-between;align-items:center;margin:12px 0 6px;font-size:12px;color:#9eb0c9}
+.phead button{border:1px solid #6d5130;background:#302318;color:#ffd49a;border-radius:7px;padding:3px 8px;font-size:11px}
+.cand{padding:9px;border:1px solid #3d5b7e;border-radius:8px;background:#162b48;color:#dbeaff;font-size:12.5px;margin-top:8px}
+.cand .ct{white-space:pre-wrap}
+.cand .meta{margin-top:6px;font-size:11px;color:#8faad0}
+.cand .check{margin-top:6px;padding:6px 8px;border-radius:7px;background:#302318;border:1px solid #6d5130;color:#ffd49a;font-size:11px}
+.cand .acts{display:flex;gap:6px;margin-top:8px}
+.cand .acts button{flex:1;border:1px solid #426183;background:#172b47;color:#cde2ff;border-radius:7px;padding:6px;font-size:11.5px}
+.cand .acts button.fill{border-color:#2f6b55;background:#143c2e;color:#9ef0c6}
+.tag{display:inline-block;padding:1px 7px;border-radius:99px;background:#1d5c40;color:#9ef0c6;font-size:10.5px;font-weight:700;margin-right:6px}
+.tag.old{background:#28405f;color:#9eb0c9}
+.nowdraft{margin-top:10px;padding:9px;border:1px solid #2f6b55;border-radius:8px;background:#0f2a22;font-size:12px;color:#e7fff4}
+.nowdraft .acts{display:flex;gap:6px;margin-top:8px}
+.nowdraft .acts button{flex:1;border:1px solid #426183;background:#172b47;color:#cde2ff;border-radius:7px;padding:6px;font-size:11.5px}
+.spin{display:inline-block;width:11px;height:11px;border:2px solid #b9d7fa55;border-top-color:#b9d7fa;border-radius:50%;animation:s 1s linear infinite;vertical-align:-1px;margin-right:6px}
+@keyframes s{to{transform:rotate(360deg)}}
+.log{margin-top:16px;font-size:12px;color:#8ea3bf}
+.log ol{margin:6px 0 0;padding-left:18px;max-height:150px;overflow:auto}
+.foot{margin-top:18px;color:#7f93ad;font-size:12px}
+.foot a{color:#94c9ff}
+@media (max-width:960px){.grid{grid-template-columns:1fr}.main{padding:20px 14px}}
+</style>
+</head>
+<body>
+<main class="main">
+  <div class="top">
+    <div>
+      <div class="eyebrow">DESIGN REVIEW · QUICK-POST · V5</div>
+      <h1>一次只发一条，其余候选缓存复用</h1>
+      <p class="sub">热榜 5 选 1 → 5 条帖文入缓存池 → 每次选 1 条填入草稿、人工发帖；没用上的下次继续用，填入前后都能换选（换下的放回缓存，不丢失）。</p>
+    </div>
+    <div class="badge">原型 v5 · 已评审</div>
+  </div>
+
+  <div class="grid">
+    <div>
+      <section class="card">
+        <h2>评审场景（点击切换）</h2>
+        <div class="body">
+          <div class="tools" id="tools">
+            <button data-s="empty" class="on">缓存空</button>
+            <button data-s="cacheList">有缓存</button>
+            <button data-s="batchLoading">生成新一批中</button>
+            <button data-s="fetchFail">获取失败</button>
+            <button data-s="decideFail">决策失败</button>
+            <button data-s="reject">决策拒选</button>
+            <button data-s="postsFail">帖文失败</button>
+            <button data-s="batchDone">新批次入池</button>
+            <button data-s="storageFail">缓存写入失败</button>
+            <button data-s="filled">已填入</button>
+            <button data-s="fillFail">回填失败</button>
+          </div>
+          <div class="row-copy" style="margin-top:10px">建议路径：缓存空 → 有缓存 →（点某条"填入发帖框"）→ 已填入 →（再点另一条演示换选）→ 回填失败 → 生成新一批中 → 新批次入池 → 再看失败与拒选。</div>
+        </div>
+      </section>
+
+      <section class="card" style="margin-top:16px">
+        <h2>缓存与换选规则（v4 核心）</h2>
+        <div class="body">
+          <div class="row"><div><div class="row-title">候选缓存池</div><div class="row-copy">批次 5 条生成后写入 chrome.storage.local，跨会话保留；含来源话题与时间。回复候选不缓存。</div></div></div>
+          <div class="row"><div><div class="row-title">每次只发一条</div><div class="row-copy">选 1 条填入草稿（唯一去向，无复制）；发帖由你人工点击 X 的发帖按钮。</div></div></div>
+          <div class="row"><div><div class="row-title">换选不丢失</div><div class="row-copy">再填入别的条目时，当前草稿那条自动撤销"已发过"标记放回可选；手动改过草稿则停止替换。</div></div></div>
+          <div class="row"><div><div class="row-title">计账与上限</div><div class="row-copy">填入的条目标记"已发过"（灰化，不可再选，跨会话保留）；"放回缓存"可反悔。上限 30 条，满时自动清理：先删已发过的，再删最旧的（2026-10-24 评审结论）。</div></div></div>
+        </div>
+      </section>
+
+      <section class="card" style="margin-top:16px">
+        <h2>设置页新增项（示意）</h2>
+        <div class="body kv">
+          <b>postPrompt</b>（必填，可编辑，机制同 replyPrompt）：
+          <pre>面向 X 发帖，目标是吸引目标读者留言互动。
+- 帖文：开头用具体细节或反差钩住人；结尾用容易回答的开放问题或低门槛选项。
+- 只使用选定话题的标题与摘要事实；不捏造个人经历、数据或他人言行。
+- 时效性事实留有余地并列入核实提示，不写进正文。
+- 像真人随手发的一条：不用营销腔、标签堆砌或 AI 式收尾。</pre>
+        </div>
+      </section>
+    </div>
+
+    <div>
+      <div class="x">
+        <div class="xbar"><span>首页 / 发帖</span><small>模拟 X · /compose/post</small></div>
+        <div class="compose">
+          <div class="th"><div class="av"></div><div><div class="name">你</div><div class="handle">@your_account</div></div></div>
+          <textarea class="ed" id="ed" placeholder="有什么新鲜事？"></textarea>
+          <div class="drow">
+            <span class="hint" id="sendHint">插件只进草稿，发帖由你人工点击</span>
+            <button class="send" id="postBtn" disabled>发帖</button>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="ptop">
+            <div>
+              <div class="pt">X 快速发帖</div>
+              <div class="pv">quick-post.v1 · 发帖模式 · 候选缓存池</div>
+            </div>
+            <div class="pv">v4 原型</div>
+          </div>
+          <div class="steps"><b>① 生成新一批（热榜 5 选 1）</b> → ② 5 条入缓存池 → ③ 每次选 1 条填入 → ④ 人工发帖 · 未用的下次继续用</div>
+
+          <button class="primary" id="batchBtn" style="margin-top:10px">生成新一批（热榜 5 选 1 → 5 条入池）</button>
+
+          <div class="status" id="status">缓存池为空。点"生成新一批"：xzhishu 热榜取 5 条 → 决策定 1 条 → 生成 5 条入池。之后每次只选 1 条填入。</div>
+
+          <div class="nowdraft" id="nowDraft" style="display:none">
+            <div><span class="tag">当前草稿来源</span><span id="nowText"></span></div>
+            <div class="acts">
+              <button id="putBack">放回缓存</button>
+            </div>
+          </div>
+
+          <div class="phead" id="cacheHead" style="display:none">
+            <span id="cacheCount">候选缓存池 · 0 条</span>
+            <button id="clearBtn">清空缓存</button>
+          </div>
+          <div id="cacheList"></div>
+
+          <button class="ghost" id="tweetsBtn">改用热门推文榜生成（话题榜为空时手动切换，不自动换源）</button>
+          <div class="ghost" id="emptyHint">暂无缓存候选。生成新一批后，未使用的候选会保留到这里，下次继续用。</div>
+        </div>
+      </div>
+
+      <section class="card" style="margin-top:16px">
+        <h2>操作与状态日志（原型反馈）</h2>
+        <div class="body log">
+          <ol id="log">
+            <li>缓存空：点击"生成新一批"开始。</li>
+          </ol>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <div class="foot">
+    边界：话题只来自 xzhishu 热榜（未授权第三方接口，失效即报错、不换源）；无手动输入、无复制、面板无发帖按钮；候选缓存写入扩展本地存储（回复候选仍不缓存）；插件不感知你是否实际发出。
+    示例数据取自 2026-10-23 xzhishu 热榜与此前真实工作流。评审问题见 <a href="../技术.md">技术.md</a>。
+  </div>
+</main>
+
+<script>
+(function () {
+  var batchBtn = document.getElementById('batchBtn');
+  var status = document.getElementById('status');
+  var cacheList = document.getElementById('cacheList');
+  var cacheHead = document.getElementById('cacheHead');
+  var cacheCount = document.getElementById('cacheCount');
+  var emptyHint = document.getElementById('emptyHint');
+  var nowDraft = document.getElementById('nowDraft');
+  var nowText = document.getElementById('nowText');
+  var ed = document.getElementById('ed');
+  var postBtn = document.getElementById('postBtn');
+  var sendHint = document.getElementById('sendHint');
+  var log = document.getElementById('log');
+
+  var CODEX2 = 'Tibo 的重置券又来了，Day 18。再这么送下去，Codex 最大的新功能就是"准时重置"了。\n\n说真的，你们额度现在什么水平？够用的评论区报个平安，不够的说说在用哪招扛。';
+  var CODEX3 = 'Day 18，Codex 又全员重置额度。\n\n好奇问一句：你们是省着用、薅重置券，还是已经换别家了？评论区对个号。';
+  var AG2 = '币安这个 Agentic Wallet：给 AI 配技能，它替你干活拿奖励。\n\n问个实际的：敢让 AI 碰钱包的报 1，只敢让它查余额的报 2，碰都不让碰的报 3。';
+  var AG3 = 'Agentic Wallet 来了，AI 从聊天开始管"技能"和"钱包"。\n\n你的授权边界在哪一步？只读 / 限额 / 全权 / 拒绝——说说你卡在哪。';
+  var AG4 = '币安新玩法：创建 Agent ID、给 AI 配技能换代币。\n\n你会为这种"AI 技能奖励"去折腾吗？会 / 看奖励力度 / 不会——评论区聊聊你的真实想法。';
+  var AG5 = '币安给 AI 发钱了（字面意思）：Agent ID 配技能换代币奖励。\n\n不吹不黑：这是你觉得有用的 AI 应用，还是又一个积分玩法？想听听大家的判断。';
+  var IP1 = 'iPhone Duo 开箱第一件事：内屏膜能撕下来。说是出厂贴膜，不少人当保护膜撕了才发现不对劲。\n\n你拿到手第一件事会干嘛？撕膜党 / 保膜党 / 先看说明书——评论区站个队。';
+  var IP2 = '折叠屏内屏到底撕不撕膜，iPhone Duo 用户已经开始吵了。\n\n问个实在的：新机到手你的第一步是什么？贴膜派 / 裸奔派 / 撕膜派——报上你的门派。';
+  var IP3 = 'iPhone Duo 这个内屏膜争议挺有意思：出厂贴膜算"保护"还是"营销"？\n\n你会为折叠屏的屏幕保护额外花钱吗？会 / 看价格 / 不会——聊聊。';
+  var IP4 = '首批 iPhone Duo 用户发现内屏膜是出厂贴膜，能撕。\n\n好奇大家的开箱仪式：膜撕不撕、壳贴不贴、先拍照还是先开机？评论区交换一下流程。';
+  var IP5 = '折叠屏老问题又来了：内屏膜撕不撕。iPhone Duo 这次是出厂贴膜。\n\n你属于哪一派？撕了就用 / 保留到底 / 再贴一层——评论区对个号。';
+
+  var OLD = { title: 'Codex 额度重置（批次 10-23 09:00）', isNew: false };
+  var AG = { title: '币安 Agentic Wallet（批次 10-23 18:30）', isNew: false };
+  var IP = { title: 'iPhone Duo 内屏膜（批次 10-24）', isNew: true };
+
+  function baseItems() {
+    return [
+      { id: 'k1', text: CODEX2, check: '发布前核实：Day 18 重置与更新内容属实', src: OLD },
+      { id: 'k2', text: CODEX3, check: '发布前核实：重置范围（全员/部分）属实', src: OLD },
+      { id: 'k3', text: AG2, check: '发布前核实：奖励发放规则与参与门槛属实', src: AG },
+      { id: 'k4', text: AG3, check: '发布前核实：功能开放范围（地区/资格）属实', src: AG },
+      { id: 'k5', text: AG4, check: '发布前核实：代币奖励与活动期限属实', src: AG },
+      { id: 'k6', text: AG5, check: '发布前核实：活动属实；机制描述需与官方公告一致', src: AG }
+    ];
+  }
+  function batchItems() {
+    return [
+      { id: 'n1', text: IP1, check: '发布前核实："出厂内屏膜可撕"与首批用户反馈属实', src: IP },
+      { id: 'n2', text: IP2, check: '发布前核实：争议来自用户反馈，非官方声明', src: IP },
+      { id: 'n3', text: IP3, check: '发布前核实：勿断言苹果官方意图', src: IP },
+      { id: 'n4', text: IP4, check: '发布前核实：首批用户开箱反馈属实', src: IP },
+      { id: 'n5', text: IP5, check: '发布前核实：出厂贴膜描述属实', src: IP }
+    ];
+  }
+
+  var cache = [];
+  var current = null;
+  var storageBroken = false;
+
+  function addLog(text) {
+    var li = document.createElement('li');
+    li.textContent = text;
+    log.insertBefore(li, log.firstChild);
+  }
+  function setStatus(cls, html) {
+    status.className = 'status' + (cls ? ' ' + cls : '');
+    status.innerHTML = html;
+  }
+  function setEditor(text, enabled, hint) {
+    ed.value = text;
+    postBtn.disabled = !enabled;
+    sendHint.textContent = hint;
+  }
+  function render() {
+    cacheHead.style.display = cache.length ? 'flex' : 'none';
+    emptyHint.style.display = cache.length ? 'none' : 'block';
+    cacheCount.textContent = '候选缓存池 · ' + cache.length + ' 条' + (storageBroken ? '（缓存写入失败，未持久化）' : '');
+    cacheList.innerHTML = '';
+    cache.forEach(function (it) {
+      var div = document.createElement('div');
+      div.className = 'cand';
+      div.style.opacity = it.used ? '.55' : '1';
+      div.innerHTML = '<div class="ct"><span class="tag' + (it.used ? ' old' : (it.src.isNew ? '' : ' old')) + '">' + (it.used ? '已发过' : (it.src.isNew ? '新 · ' : '') + it.src.title) + '</span></div>'
+        + '<div class="ct" style="margin-top:6px">' + it.text.replace(/\n/g, '<br>') + '</div>'
+        + '<div class="check">' + it.check + '</div>'
+        + (it.used
+          ? '<div class="acts"><button data-restore="' + it.id + '">放回可选</button><button data-del="' + it.id + '">删除</button></div>'
+          : '<div class="acts"><button class="fill" data-fill="' + it.id + '">填入发帖框</button><button data-del="' + it.id + '">删除</button></div>');
+      cacheList.appendChild(div);
+    });
+    nowDraft.style.display = current ? 'block' : 'none';
+    if (current) nowText.textContent = current.text.slice(0, 24) + '…';
+  }
+
+  var scenarios = {
+    empty: function () {
+      cache = []; current = null; storageBroken = false;
+      batchBtn.disabled = false; batchBtn.textContent = '生成新一批（热榜 5 选 1 → 5 条入池）';
+      setEditor('', false, '插件只进草稿，发帖由你人工点击');
+      setStatus('', '缓存池为空。点"生成新一批"：xzhishu 热榜取 5 条 → 决策定 1 条 → 生成 5 条入池。之后每次只选 1 条填入。');
+      render();
+      addLog('缓存空：无候选，需生成新一批。');
+    },
+    cacheList: function () {
+      cache = baseItems(); current = null; storageBroken = false;
+      batchBtn.disabled = false; batchBtn.textContent = '生成新一批（热榜 5 选 1 → 5 条入池）';
+      setEditor('', false, '插件只进草稿，发帖由你人工点击');
+      setStatus('success', '缓存池 6 条（含上次未用完的候选）。每次选 1 条点"填入发帖框"；不满意可换选，换下的自动放回。');
+      render();
+      addLog('有缓存：跨会话恢复 6 条候选。');
+    },
+    batchLoading: function () {
+      scenarios.cacheList();
+      batchBtn.disabled = true; batchBtn.textContent = '生成新一批中…';
+      setStatus('', '<span class="spin"></span>生成新一批：① 请求 xzhishu 热榜 → ② 决策定话题 → ③ 生成 5 条入池（当前阶段 2/3）…');
+      addLog('生成新一批中：一键三步，失败按阶段停止。');
+    },
+    fetchFail: function () {
+      scenarios.cacheList();
+      setStatus('error', '生成失败（阶段 topics.fetch：xzhishu 请求超时/HTTP 错误）。已停止；缓存池不受影响，不换数据源、不用旧榜单。');
+      addLog('获取失败：停止本批，缓存保留。');
+    },
+    decideFail: function () {
+      scenarios.cacheList();
+      setStatus('error', '生成失败（阶段 topics.decide.parse：百炼响应不符合契约）。已停止，未生成帖文；缓存池不受影响。');
+      addLog('决策失败：停止本批。');
+    },
+    reject: function () {
+      scenarios.cacheList();
+      setStatus('', '决策拒选：5 条话题均不合适（__none__）。已停止，不自行挑话题；缓存池不受影响，可稍后再试。');
+      addLog('决策拒选：本批不生成帖文。');
+    },
+    postsFail: function () {
+      scenarios.cacheList();
+      setStatus('error', '生成失败（阶段 posts.parse：上游返回非法 JSON）。已停止；本批未产出，缓存池不受影响。');
+      addLog('帖文失败：停止本批，缓存保留。');
+    },
+    batchDone: function () {
+      cache = baseItems().concat(batchItems()); current = null; storageBroken = false;
+      cache.forEach(function (it) { if (it.src.isNew) it.src = IP; });
+      batchBtn.disabled = false; batchBtn.textContent = '生成新一批（热榜 5 选 1 → 5 条入池）';
+      setEditor('', false, '插件只进草稿，发帖由你人工点击');
+      setStatus('success', '本批话题：iPhone Duo 内屏膜（决策 5 选 1）。5 条已入缓存池（现共 11 条），每次仍只选 1 条填入。');
+      render();
+      addLog('新批次入池：5 条新候选与旧候选并存。');
+    },
+    storageFail: function () {
+      cache = baseItems(); current = null; storageBroken = true;
+      batchBtn.disabled = false;
+      setEditor('', false, '插件只进草稿，发帖由你人工点击');
+      setStatus('error', '缓存写入失败（阶段 cache.write）。本批候选本次可见可用，但不会保留到下次；不提示已缓存。请检查扩展存储。');
+      render();
+      addLog('缓存写入失败：显式报错，不包装成功。');
+    },
+    filled: function () {
+      scenarios.cacheList();
+      var it = cache.filter(function (x) { return x.id === 'k3'; })[0];
+      it.used = true;
+      current = it;
+      setEditor(it.text, true, '草稿由插件填入，发帖仍由你人工点击');
+      setStatus('success', '已填入草稿（未发送）。该条标记"已发过"（灰化）；不满意可换选其他条，换下的自动放回可选。');
+      render();
+      addLog('已填入 k3：标记"已发过"（跨会话保留，清理时优先删除）。');
+    },
+    fillFail: function () {
+      scenarios.filled();
+      setStatus('error', '回填失败：发帖框内容与快照不一致（阶段 fill.verify）。已停止，不覆盖、不重试；该候选仍在缓存池中。');
+      setEditor('今天随便聊聊……', false, '发帖框已有内容/已变化，插件停止回填');
+      addLog('回填失败：目标或草稿变化即停，候选保留。');
+    }
+  };
+
+  document.getElementById('tools').addEventListener('click', function (e) {
+    var btn = e.target.closest('button[data-s]');
+    if (!btn) return;
+    Array.prototype.forEach.call(document.querySelectorAll('#tools button'), function (b) { b.classList.remove('on'); });
+    btn.classList.add('on');
+    scenarios[btn.getAttribute('data-s')]();
+  });
+
+  batchBtn.addEventListener('click', function () {
+    addLog('生成新一批：获取话题 → 决策 → 生成 5 条入池（原型仅示意）。');
+    scenarios.batchDone();
+    document.querySelector('#tools button[data-s="batchDone"]').classList.add('on');
+    document.querySelector('#tools button[data-s="empty"]').classList.remove('on');
+    document.querySelector('#tools button[data-s="cacheList"]').classList.remove('on');
+  });
+
+  document.getElementById('putBack').addEventListener('click', function () {
+    if (!current) return;
+    current.used = false;
+    addLog('放回缓存：撤销"已发过"标记，候选回到可选列表（草稿文本保留）。');
+    setStatus('success', '已放回可选列表。草稿文本仍留在发帖框，由你决定删除或继续用。');
+    current = null;
+    render();
+  });
+
+  document.getElementById('clearBtn').addEventListener('click', function () {
+    cache = [];
+    addLog('清空缓存：全部条目删除（持久化同步清空）。');
+    setStatus('success', '已清空缓存池。');
+    render();
+  });
+
+  cacheList.addEventListener('click', function (e) {
+    var fill = e.target.closest('button[data-fill]');
+    var restore = e.target.closest('button[data-restore]');
+    var del = e.target.closest('button[data-del]');
+    if (fill) {
+      var id = fill.getAttribute('data-fill');
+      var it = cache.filter(function (x) { return x.id === id; })[0];
+      if (!it || it.used) return;
+      if (current) {
+        current.used = false;
+        addLog('换选：原草稿候选自动撤销"已发过"标记放回可选，新候选填入。');
+      } else {
+        addLog('填入候选：空草稿、单次写入、精确核验；绝不点击发帖。');
+      }
+      it.used = true;
+      current = it;
+      setEditor(it.text, true, '草稿由插件填入，发帖仍由你人工点击');
+      setStatus('success', '已填入草稿（未发送）：' + it.text.slice(0, 18) + '… 该条标记"已发过"；每次只发一条，可换选或放回。');
+      render();
+      return;
+    }
+    if (restore) {
+      var rid = restore.getAttribute('data-restore');
+      cache.forEach(function (x) { if (x.id === rid) x.used = false; });
+      if (current && current.id === rid) current = null;
+      addLog('放回可选 ' + rid + '：撤销"已发过"标记。');
+      setStatus('success', '已放回可选列表（草稿文本仍留在发帖框，由你处理）。');
+      render();
+      return;
+    }
+    if (del) {
+      var did = del.getAttribute('data-del');
+      cache = cache.filter(function (x) { return x.id !== did; });
+      if (current && current.id === did) current = null;
+      addLog('删除条目 ' + did + '：从缓存池移除并持久化。');
+      setStatus('success', '已删除 1 条缓存候选。');
+      render();
+    }
+  });
+
+  document.getElementById('modeReply').addEventListener('click', function () {
+    setStatus('', '本原型只演示发帖模式；回复为 quick-reply 现有功能（候选不缓存），行为不变。');
+    addLog('回复模式：不在本原型范围。');
+  });
+
+  postBtn.addEventListener('click', function () {
+    addLog('发帖：由用户人工点击 X 发帖按钮（插件不感知发帖完成）。');
+  });
+
+  scenarios.empty();
+})();
+</script>
+</body>
+</html>

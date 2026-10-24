@@ -1,5 +1,5 @@
 (() => {
-  const VERSION = "0.4.3";
+  const VERSION = "0.6.0";
   const INVALID_CONTEXT_TEXT = "插件连接已失效。请刷新 X 页面，再重新打开回复弹窗并生成。";
   function isInvalidContext(error) { return /^Extension context invalidated\.?$/i.test(error?.message || ""); }
   const READY_TEXT = "点击下方按钮，生成回复并填入输入框。";
@@ -10,6 +10,9 @@
   const LIKE_DELAY_MAX_MS = 4000;
   const SEND_CONFIRMATION_TIMEOUT_MS = 5000;
   const LIKE_TARGET_TIMEOUT_MS = 5000;
+  const AUTO_TRIGGER_WINDOW_MS = 5000;
+  const COUNTDOWN_TICK_MS = 250;
+  const COUNTDOWN_INVALID_TEXT = "一键回复倒计时设置无效（需 3–60 秒整数），请重新保存扩展设置";
   try {
   if (!globalThis.React || !globalThis.ReactDOM) throw new Error("React runtime 未加载，无法初始化快速回复面板");
   const PANEL_ID = "quick-reply-panel";
@@ -25,13 +28,24 @@
   let dismissed = false;
   let inserting = false;
   let pendingFill = null;
+  let pendingSend = null;
+  let sendConfirmation = null;
+  let autoTrigger = null;
+  let autoTriggerRead = 0;
+  let countdown = null;
   let panelMount = null;
-  let ui = { status: READY_TEXT, statusError: false, generating: false, routeHidden: false };
+  // quick-post: draft cache is owned by the service worker; these are views.
+  let postCache = [];
+  let postHistoryCount = 0;
+  let postBatch = null;
+  let postFilledId = null;
+  let ui = { status: READY_TEXT, statusError: false, generating: false, routeHidden: false, countdown: null };
   const autoLike = createAutoLikeController({
     getSource: () => source,
     readContext,
     isReplyRoute,
-    setStatus
+    setStatus,
+    onSendConfirmed: releaseSentReply
   });
 
   // A DOM node is not evidence that this extension context has a live listener.
@@ -49,21 +63,35 @@
     // Framework notifications for the exact expected text do not transfer
     // ownership. Any actual user input or different text invalidates it.
     if (!event.isTrusted && editorText(source.editor) === (pendingFill?.text ?? source.draft)) return;
-    invalidate("草稿已变化，请重新生成");
+    invalidate(countdown ? "已取消自动发送（草稿被修改），未发送；请手动检查后发送" : "草稿已变化，请重新生成");
   };
   document.addEventListener("input", onInput, true);
   const onDocumentClick = (event) => {
     autoLike.captureReplyLaunch(event.target);
+    captureAutoTrigger(event);
     autoLike.handleSendClick(event.target);
   };
   document.addEventListener("click", onDocumentClick, true);
   const onMessage = (message, _sender, sendResponse) => {
-    if (message?.type !== "OPEN_QUICK_REPLY") return;
+    const type = message?.type;
+    if (type !== "OPEN_QUICK_REPLY" && type !== "OPEN_QUICK_POST") return;
     dismissed = false;
     ui.routeHidden = false;
     renderPanel();
-    try { readContext(); setStatus(`已识别当前回复目标。${READY_TEXT}`); sendResponse({ ok: true, version: VERSION }); }
-    catch (error) { setStatus(error.message, true); sendResponse({ ok: false, error: error.message }); }
+    try {
+      if (type === "OPEN_QUICK_POST") {
+        // 发帖是独立入口：只在发帖场景打开发帖面板，不与回复混用。
+        if (!isComposeScene()) throw new Error("请先打开发帖弹窗或 /compose/post，再点击“发帖助手”");
+        readComposeContext();
+        loadPostCache();
+        setStatus(`已识别发帖框。点击“生成新一批”，从 xzhishu 热榜取话题并生成帖文。`);
+      } else {
+        if (isComposeScene()) throw new Error("当前是发帖场景，回复面板不可用；请点击工具栏的“发帖助手”");
+        readContext();
+        setStatus(`已识别当前回复目标。${READY_TEXT}`);
+      }
+      sendResponse({ ok: true, version: VERSION });
+    } catch (error) { setStatus(error.message, true); sendResponse({ ok: false, error: error.message }); }
   };
   chrome.runtime.onMessage.addListener(onMessage);
   const timer = observeUrlChanges();
@@ -71,6 +99,10 @@
     generation++;
     clearTimeout(pendingFill?.timer);
     pendingFill = null;
+    pendingSend = null;
+    autoTrigger = null;
+    clearCountdown();
+    clearSendConfirmation();
     clearInterval(timer);
     autoLike.dispose();
     document.removeEventListener("input", onInput, true);
@@ -79,6 +111,54 @@
     panelMount.remove();
   } };
   autoLike.restore();
+
+  /**
+   * One-click auto trigger: only a trusted click on X's own reply control may
+   * start an automatic send. The setting is read fresh for every click so that
+   * turning the switch off takes effect immediately.
+   */
+  function captureAutoTrigger(event) {
+    if (!event.isTrusted || isConversation()) return;
+    const replyButton = event.target instanceof Element ? event.target.closest('[data-testid="reply"]') : null;
+    if (!replyButton?.closest('[data-testid="tweet"]')) return;
+    const read = ++autoTriggerRead;
+    autoTrigger = null;
+    Promise.resolve().then(() => {
+      // StorageArea methods must keep their receiver.
+      const storage = chrome.storage?.local;
+      if (!storage || typeof storage.get !== "function") throw new Error("chrome.storage.local.get 不可用");
+      return storage.get({ oneClickReply: false, oneClickCountdownSeconds: 10 });
+    }).then((settings) => {
+      if (read !== autoTriggerRead) return;
+      if (typeof settings.oneClickReply !== "boolean") return setStatus("一键回复开关设置无效，请重新保存扩展设置", true);
+      if (!settings.oneClickReply) return;
+      if (!isValidCountdownSeconds(settings.oneClickCountdownSeconds)) return setStatus(COUNTDOWN_INVALID_TEXT, true);
+      autoTrigger = { deadline: Date.now() + AUTO_TRIGGER_WINDOW_MS };
+      consumeAutoTrigger();
+    }).catch((error) => {
+      if (read !== autoTriggerRead) return;
+      if (isInvalidContext(error)) return setStatus(INVALID_CONTEXT_TEXT, true);
+      setStatus(`读取一键回复设置失败：${error.message}`, true);
+    });
+  }
+
+  // Consumed at most once, when the reply dialog opened by that click appears.
+  function consumeAutoTrigger() {
+    if (!autoTrigger) return;
+    if (Date.now() > autoTrigger.deadline) { autoTrigger = null; return; }
+    if (!hasVisibleReplyDialog()) return;
+    autoTrigger = null;
+    // An unfinished reply keeps ownership of the panel; a new click never preempts it.
+    if (ui.generating || pendingFill || countdown || sendConfirmation || autoLike.isPending()) {
+      return setStatus("上一条回复仍在处理中，本次未自动生成；请等待完成后重新打开回复", true);
+    }
+    dismissed = false;
+    generate({ trigger: "auto" });
+  }
+
+  function isValidCountdownSeconds(value) {
+    return Number.isInteger(value) && value >= 3 && value <= 60;
+  }
 
   function renderPanel() {
     if (!panelMount) return;
@@ -89,20 +169,27 @@
       statusError: ui.statusError,
       generating: ui.generating,
       hidden: dismissed || ui.routeHidden,
+      panelKind: isComposeScene() ? "post" : "reply",
       candidates: state.candidates,
       selectedId: state.selectedId,
       decision: state.decision,
       pendingFill: !!pendingFill,
+      postCache: postCache,
+      postBatch: postBatch,
+      postFilledId: postFilledId,
+      postHistoryCount,
+      countdown: ui.countdown,
+      sending: !!sendConfirmation,
       onAction: handlePanelAction,
       onCandidateSelect: selectCandidate
     }), panelMount);
   }
 
-  function handlePanelAction(action) {
+  function handlePanelAction(action, argument) {
     switch (action) {
       case "close":
         dismissed = true;
-        invalidate("面板已关闭，旧请求已取消");
+        invalidate(countdown ? "已取消自动发送（面板已关闭），未发送；请手动检查后发送" : "面板已关闭，旧请求已取消", !countdown);
         break;
       case "generate":
         generate();
@@ -110,8 +197,35 @@
       case "fill":
         fillSelected();
         break;
+      case "send-now":
+        sendCountdownNow();
+        break;
+      case "cancel-send":
+        cancelCountdown();
+        break;
       case "diagnostics":
         copyDiagnostics();
+        break;
+      case "post-batch":
+        generateBatch("topics");
+        break;
+      case "post-batch-tweets":
+        generateBatch("tweets");
+        break;
+      case "post-fill":
+        fillPostItem(argument);
+        break;
+      case "post-unmark":
+        postCacheOp("unmark", argument);
+        break;
+      case "post-delete":
+        postCacheOp("delete", argument);
+        break;
+      case "post-clear":
+        postCacheOp("clear");
+        break;
+      case "post-clear-history":
+        postCacheOp("clear-history");
         break;
       default:
         throw new Error(`未知面板操作：${action}`);
@@ -119,7 +233,16 @@
   }
 
   function selectCandidate(candidateId) {
-    if (state.decision?.reviewRequired || pendingFill) return;
+    if (state.decision?.reviewRequired || pendingFill || sendConfirmation) return;
+    if (countdown) {
+      if (candidateId === state.selectedId) return;
+      // Choosing another candidate during the countdown confirms it: replace
+      // the unchanged plugin draft, verify, then send once without a new countdown.
+      clearCountdown();
+      state.selectedId = candidateId;
+      renderPanel();
+      return fillSelected({ send: { mode: "immediate" } });
+    }
     state.selectedId = candidateId;
     renderPanel();
   }
@@ -127,12 +250,12 @@
   function QuickReplyPanel(props) {
     const h = React.createElement;
     const reviewRequired = props.decision?.reviewRequired === true;
-    const fillHidden = !props.selectedId || reviewRequired;
+    const fillHidden = !props.selectedId || reviewRequired || !!props.countdown;
     const fillDisabled = !props.selectedId || reviewRequired || props.pendingFill;
     const candidateNodes = props.candidates.map(candidate => h(
       "button",
       { key: candidate.id, type: "button", className: `qr-candidate ${candidate.id === props.selectedId ? "selected" : ""}`,
-        "data-candidate": candidate.id, disabled: reviewRequired || props.pendingFill,
+        "data-candidate": candidate.id, disabled: reviewRequired || props.pendingFill || props.sending,
         onClick: () => props.onCandidateSelect(candidate.id) },
       h("span", null, candidate.text),
       candidate.id === props.decision?.selectedId ? h("em", null, "百炼选中") : null
@@ -142,24 +265,100 @@
       { key: "reason", className: "qr-reason" },
       `选择置信度：${(props.decision.confidence * 100).toFixed(1)}%（不代表回复正确率）`
     ));
+    const postMode = props.panelKind === "post";
+    const postSource = props.postBatch?.board || "热门话题榜";
+    const postBatchAction = postSource === "热门推文榜" ? "post-batch-tweets" : "post-batch";
+    const postSourceAction = postSource === "热门推文榜" ? "post-batch" : "post-batch-tweets";
+    const postSourceActionLabel = postSource === "热门推文榜" ? "改用热门话题榜" : "改用热门推文榜";
+    const postStep1 = props.generating ? "done" : (props.postBatch || props.postCache.length ? "done" : "active");
+    const postStep2 = props.generating ? "active" : (props.postBatch || props.postCache.length ? "done" : "");
+    const postStep3 = props.postFilledId ? "done" : (props.postCache.length ? "active" : "");
+    // Cache entries are grouped by their source topic: each topic keeps its
+    // own post(s) underneath instead of one flat, cramped list.
+    const groups = [];
+    for (const item of props.postCache) {
+      let group = groups.find((entry) => entry.id === item.sourceTopic.id);
+      if (!group) { group = { id: item.sourceTopic.id, title: item.sourceTopic.title, items: [] }; groups.push(group); }
+      group.items.push(item);
+    }
+    const cacheNodes = groups.map(group => h(
+      "div", { key: group.id, className: "qr-topic-group", "data-topic-group": group.id },
+      h("div", { className: "qr-topic-head" }, group.title),
+      h("div", { className: "qr-topic-posts" }, group.items.map(item => h(
+        "div", { key: item.id, className: `qr-cache-item${item.usedAt ? " used" : ""}`, "data-cache-item": item.id },
+        h("div", { className: "qr-cache-top" },
+          h("span", { className: `qr-cache-tag${item.usedAt ? " used" : ""}` }, item.usedAt ? "已填入草稿" : "可选候选"),
+          h("span", { className: "qr-cache-meta" }, `${new Date(item.createdAt).toLocaleString()}${item.text === props.postBatch?.recommendedText ? " · 决策推荐" : ""}${item.usedAt ? " · 已发过" : ""}${item.sessionOnly ? " · 未入缓存" : ""}`)),
+        h("div", { className: "qr-cache-text" }, item.text),
+        item.checkNotes.length ? h("div", { className: "qr-cache-check" }, item.checkNotes.join("；")) : null,
+        h("div", { className: "qr-cache-actions" },
+          item.usedAt
+            ? h("button", { type: "button", "data-action": "post-unmark", disabled: props.pendingFill,
+                onClick: () => props.onAction("post-unmark", item.id) }, "放回可选")
+            : h("button", { type: "button", className: "qr-fill", "data-action": "post-fill", disabled: props.pendingFill,
+                onClick: () => props.onAction("post-fill", item.id) }, "填入草稿"),
+          h("button", { type: "button", "data-action": "post-delete", disabled: props.pendingFill,
+            onClick: () => props.onAction("post-delete", item.id) }, "删除")
+        )
+      )))
+    ));
     return h("aside", { id: PANEL_ID, hidden: props.hidden, "aria-busy": String(props.generating || props.pendingFill) },
       h("div", { className: "qr-header" },
-        h("strong", null, `快速回复 · ${props.version}`),
+        h("strong", null, postMode ? "快速发帖" : `快速回复 · ${props.version}`),
         h("button", { type: "button", title: "关闭", "data-action": "close", onClick: () => props.onAction("close") }, "×")
       ),
-      h("div", { className: `qr-status${props.statusError ? " error" : ""}`, "data-role": "status", role: "status" }, props.status),
-      h("button", { type: "button", className: "qr-primary", "data-action": "generate", disabled: props.generating || props.pendingFill,
-        onClick: () => props.onAction("generate") }, props.generating ? "生成中，请稍候…" : "生成并填入回复"),
-      h("div", { className: "qr-candidates", "data-role": "candidates" }, candidateNodes),
-      h("button", { type: "button", className: "qr-fill", "data-action": "fill", hidden: fillHidden, disabled: fillDisabled,
-        onClick: () => props.onAction("fill") }, "回填输入框"),
+      postMode ? h(React.Fragment, null,
+        h("div", { className: "qr-post-body" },
+          h("div", { className: "qr-post-source" },
+            h("span", { className: "qr-source-pill" }, h("span", { "aria-hidden": "true" }, "●"), `当前来源：${postSource}`),
+            h("button", { type: "button", className: "qr-source-switch", "data-action": postSourceAction,
+              disabled: props.generating || props.pendingFill,
+              onClick: () => props.onAction(postSourceAction) }, postSourceActionLabel)
+          ),
+          h("div", { className: "qr-workflow", "aria-label": "发帖流程" },
+            h("div", { className: `qr-step ${postStep1}`, "aria-current": postStep1 === "active" ? "step" : undefined }, "1 · 选话题"),
+            h("div", { className: `qr-step ${postStep2}`, "aria-current": postStep2 === "active" ? "step" : undefined }, "2 · 生成候选"),
+            h("div", { className: `qr-step ${postStep3}`, "aria-current": postStep3 === "active" ? "step" : undefined }, "3 · 填入草稿")
+          ),
+          h("div", { className: `qr-status${props.statusError ? " error" : ""}`, "data-role": "status", role: "status" }, props.status),
+          h("button", { type: "button", className: "qr-primary", "data-action": postBatchAction, disabled: props.generating || props.pendingFill,
+            onClick: () => props.onAction(postBatchAction) }, props.generating ? "生成中，请稍候…" : "生成新一批"),
+          h("div", { className: "qr-cache-head" },
+            h("span", null, `候选缓存池 · ${props.postCache.length} 条`, h("small", { className: "qr-history-count" }, `历史去重 ${props.postHistoryCount} 条`)),
+            h("button", { type: "button", "data-action": "post-clear-history", disabled: props.pendingFill || !props.postHistoryCount,
+              onClick: () => props.onAction("post-clear-history") }, "清除去重历史"),
+            h("button", { type: "button", "data-action": "post-clear", disabled: props.pendingFill || !props.postCache.length,
+              onClick: () => props.onAction("post-clear") }, "清空缓存")
+          ),
+          h("div", { className: "qr-candidates", "data-role": "cache" }, cacheNodes.length ? cacheNodes : h("div", { className: "qr-reason" }, "暂无缓存候选。生成新一批后，未使用的候选会保留到下次。"))
+        )
+      ) : h(React.Fragment, null,
+        h("div", { className: `qr-status${props.statusError ? " error" : ""}`, "data-role": "status", role: "status" }, props.status),
+        h("button", { type: "button", className: "qr-primary", "data-action": "generate",
+          disabled: props.generating || props.pendingFill || !!props.countdown || props.sending,
+          onClick: () => props.onAction("generate") }, props.generating ? "生成中，请稍候…" : "生成并填入回复"),
+        props.countdown ? h("div", { className: "qr-countdown", "data-role": "countdown" },
+          h("div", { className: "qr-countdown-head" },
+            h("span", null, "即将发送公开回复"),
+            h("strong", { "data-role": "countdown-seconds" }, String(props.countdown.seconds))),
+          h("div", { className: "qr-countdown-bar" }, h("i", { style: { width: `${props.countdown.progress * 100}%` } })),
+          h("div", { className: "qr-countdown-text" }, props.countdown.text),
+          h("small", null, "点击其他候选会替换并立即发送"),
+          h("div", { className: "qr-countdown-actions" },
+            h("button", { type: "button", className: "qr-send-now", "data-action": "send-now", onClick: () => props.onAction("send-now") }, "立即发送"),
+            h("button", { type: "button", className: "qr-cancel-send", "data-action": "cancel-send", onClick: () => props.onAction("cancel-send") }, "取消发送"))
+        ) : null,
+        h("div", { className: "qr-candidates", "data-role": "candidates" }, candidateNodes),
+        h("button", { type: "button", className: "qr-fill", "data-action": "fill", hidden: fillHidden, disabled: fillDisabled,
+          onClick: () => props.onAction("fill") }, "回填输入框")
+      ),
       h("button", { type: "button", className: "qr-diagnostics", "data-action": "diagnostics", hidden: !props.statusError,
         onClick: () => props.onAction("diagnostics") }, "复制排查信息")
     );
   }
 
-  async function generate() {
-    if (pendingFill) return;
+  async function generate({ trigger = "manual" } = {}) {
+    if (pendingFill || countdown || sendConfirmation) return;
     const current = ++generation;
     source = null;
     state = { candidates: [], decision: null, mode: "" };
@@ -172,7 +371,7 @@
         target: context.target, dialog: context.dialog, textNode: context.textNode, targetLinks: context.targetLinks,
         draft: editorText(context.editor) };
       setGenerating(true);
-      setStatus("正在生成回复并选择合适内容，请稍候…");
+      setStatus(trigger === "auto" ? "已打开回复，正在自动生成回复并选择合适内容…" : "正在生成回复并选择合适内容，请稍候…");
       response = await chrome.runtime.sendMessage({ type: "GENERATE_REPLIES", context: { kind: context.kind, messages: context.messages, language: "auto" } });
     } catch (error) {
       if (current !== generation) return;
@@ -185,11 +384,146 @@
     if (!sourceIsCurrent()) return setStatus("会话或草稿已变化，请重新生成", true);
     if (!response?.ok) return setStatus(response?.error || "生成失败", true);
     autoLike.configure(response.autoLikeAfterReply === true);
+    // Only the trusted reply-button trigger sends; the panel button always fills only.
+    const autoSend = trigger === "auto" && response.oneClickReply === true && source.kind === "public-reply";
+    if (autoSend && !isValidCountdownSeconds(response.oneClickCountdownSeconds)) return setStatus(COUNTDOWN_INVALID_TEXT, true);
     state = { candidates: response.candidates, decision: response.decision, selectedId: response.decision.selectedId, mode: response.mode };
     renderPanel();
-    if (state.decision.reviewRequired) return setStatus("百炼未选择合适回复，请人工起草", true);
+    if (state.decision.reviewRequired) return setStatus(autoSend ? "百炼未选择合适回复，未发送，请人工起草" : "百炼未选择合适回复，请人工起草", true);
     setStatus("已生成，百炼已选择候选");
-    fillSelected();
+    fillSelected({ send: autoSend ? { mode: "countdown", seconds: response.oneClickCountdownSeconds } : null });
+  }
+
+  // ---- quick-post batch flow: topics fetch -> decision -> 5 posts -> cache ----
+
+  async function generateBatch(board = "topics") {
+    if (pendingFill) return;
+    const current = ++generation;
+    source = null;
+    renderPanel();
+    const boardLabel = board === "tweets" ? "热门推文榜" : "热门话题榜";
+    let response;
+    try {
+      const context = readComposeContext();
+      if (editorText(context.editor).trim()) throw new Error("发帖框已有草稿，请处理草稿后重新生成");
+      source = { url: location.href, kind: "original-post", key: contextKey(context), editor: context.editor,
+        target: context.target, dialog: context.dialog, textNode: null, targetLinks: [],
+        draft: editorText(context.editor) };
+      setGenerating(true);
+      setStatus(`正在从${boardLabel}获取话题并生成候选帖文，请稍候…`);
+      response = await chrome.runtime.sendMessage({ type: "GENERATE_POST_BATCH", source: board });
+    } catch (error) {
+      if (current !== generation) return;
+      if (isInvalidContext(error)) return invalidate(INVALID_CONTEXT_TEXT);
+      return setStatus(error instanceof Error ? error.message : "生成失败", true);
+    } finally {
+      if (current === generation) setGenerating(false);
+    }
+    if (current !== generation) return;
+    if (!sourceIsCurrent()) return setStatus("发帖框已变化，请重新生成", true);
+    if (!response?.ok) return setStatus(response?.error || "生成失败", true);
+    // The decision model only annotates one recommended post. An abstention
+    // hides that mark; every generated post still goes to the cache pool.
+    const recommended = response.decision && response.decision.reviewRequired !== true
+      ? response.candidates.find((candidate) => candidate.id === response.decision.selectedId)
+      : null;
+    postBatch = { evicted: response.evicted, topicCount: response.topics.length,
+      board: response.source === "xzhishu-tweets-hot" ? "热门推文榜" : "热门话题榜",
+      recommendedText: recommended ? recommended.text : null };
+    if (response.cacheError) {
+      // The batch is usable this session but must never be presented as cached.
+      postCache = response.candidates.map((candidate) => {
+        const topic = response.topics.find((entry) => entry.id === candidate.topicId);
+        return { id: candidate.id, text: candidate.text, checkNotes: candidate.checkNotes,
+          sourceTopic: { id: topic.id, title: topic.title }, batchId: "session",
+          createdAt: Date.now(), sessionOnly: true };
+      });
+      renderPanel();
+      return setStatus(`${response.cacheError}。本批候选仅本次可用（标注“未入缓存”），填入后不保留到下次`, true);
+    }
+    postCache = response.cache;
+    postHistoryCount = response.historyCount ?? postHistoryCount + response.candidates.length - (response.skippedCount || 0);
+    let text = `本批来源：${postBatch.board}。候选已入缓存池（共 ${response.cache.length} 条）；`
+      + (recommended ? "已标记 1 条推荐。" : "本批未标记推荐，请自选。") + "每次选 1 条填入。";
+    if (response.skippedCount) text += ` 已跳过 ${response.skippedCount} 条历史重复。`;
+    if (!response.cache.length && response.skippedCount) text = `本批 ${response.skippedCount} 条候选全部命中历史去重，未新增缓存；未自动重试或换源。`;
+    if (response.evicted) text += ` 缓存已满，已自动清理 ${response.evicted} 条（先已发过的，再最旧的）。`;
+    setStatus(text);
+    renderPanel();
+  }
+
+  function ensurePostSource() {
+    if (source?.kind === "original-post" && sourceIsCurrent()) return true;
+    try {
+      const context = readComposeContext();
+      if (editorText(context.editor).trim()) return false; // Never overwrite a non-empty draft.
+      source = { url: location.href, kind: "original-post", key: contextKey(context), editor: context.editor,
+        target: context.target, dialog: context.dialog, textNode: null, targetLinks: [], draft: "" };
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async function fillPostItem(itemId) {
+    const item = postCache.find((entry) => entry.id === itemId);
+    if (!item) return setStatus("缓存条目不存在", true);
+    if (item.usedAt) return setStatus("该条已标记“已发过”，可点“放回可选”后再使用", true);
+    if (pendingFill) return;
+    if (!ensurePostSource()) return setStatus("发帖框已有草稿或目标变化；请处理草稿后重试", true);
+    if (source.owned && source.draft === item.text) return setStatus("已填入此条，无需重复填入；请检查后手动点击发帖");
+    return fillCandidate(item);
+  }
+
+  async function onPostFilled(item) {
+    if (item.sessionOnly) {
+      postFilledId = item.id;
+      renderPanel();
+      return;
+    }
+    try {
+      if (postFilledId && postFilledId !== item.id) {
+        const restored = await chrome.runtime.sendMessage({ type: "POST_CACHE_OP", op: "unmark", id: postFilledId });
+        if (!restored?.ok) throw new Error(restored?.error || "放回候选失败");
+      }
+      const marked = await chrome.runtime.sendMessage({ type: "POST_CACHE_OP", op: "mark", id: item.id });
+      if (!marked?.ok) throw new Error(marked?.error || "标记候选失败");
+      postFilledId = item.id;
+      postCache = marked.items;
+    } catch (error) {
+      return setStatus(`候选计账失败：${error instanceof Error ? error.message : error}；草稿已填入，请自行核对`, true);
+    }
+    renderPanel();
+  }
+
+  async function postCacheOp(op, id) {
+    if (pendingFill) return;
+    try {
+      const response = await chrome.runtime.sendMessage({ type: "POST_CACHE_OP", op, id });
+      if (!response?.ok) throw new Error(response?.error || "缓存操作失败");
+      postCache = response.items;
+      if (op === "clear-history") postHistoryCount = response.historyCount || 0;
+      if (op === "clear") postFilledId = null;
+      if (op === "unmark" && postFilledId === id) postFilledId = null;
+      if (op === "delete" && postFilledId === id) postFilledId = null;
+      renderPanel();
+      setStatus(op === "clear-history" ? "已清除历史去重记录；相同正文下次可能再次进入缓存" : op === "clear" ? "已清空候选缓存池" : op === "delete" ? "已删除 1 条缓存候选" : "已放回可选列表（草稿文本仍留在发帖框，由你处理）");
+    } catch (error) {
+      return setStatus(`缓存操作失败：${error instanceof Error ? error.message : error}`, true);
+    }
+  }
+
+  async function loadPostCache() {
+    try {
+      const response = await chrome.runtime.sendMessage({ type: "LIST_POST_CACHE" });
+      if (!response?.ok) throw new Error(response?.error || "缓存读取失败");
+      postCache = response.items;
+      postHistoryCount = response.historyCount || 0;
+      setStatus(`发帖模式：候选按来源话题分组。当前缓存 ${postCache.length} 条，历史去重 ${postHistoryCount} 条，每次选 1 条填入，发帖由你人工点击。`);
+    } catch (error) {
+      return setStatus(error instanceof Error ? error.message : "缓存读取失败", true);
+    }
+    renderPanel();
   }
 
   /**
@@ -197,7 +531,7 @@
    * The host only supplies context reading and status reporting; DOM polling,
    * navigation persistence, and like-state verification stay inside this module.
    */
-  function createAutoLikeController({ getSource, readContext, isReplyRoute, setStatus }) {
+  function createAutoLikeController({ getSource, readContext, isReplyRoute, setStatus, onSendConfirmed }) {
     let enabled = false;
     let settingResolved = false;
     let operation = null;
@@ -239,6 +573,9 @@
 
     function configure(value) {
       enabled = value === true;
+      // The worker response is the current saved snapshot for this generation.
+      // Mark it resolved before the synthetic send click so one-click reply and
+      // auto-like share exactly one confirmation workflow.
       settingResolved = true;
     }
 
@@ -358,6 +695,7 @@
         operation.likeReadyAt = Date.now() + delayMs;
         operation.deadline = operation.likeReadyAt + LIKE_TARGET_TIMEOUT_MS;
         log("reply-send-confirmed", { editorGone, editorCleared, delayMs, likeReadyAt: operation.likeReadyAt });
+        onSendConfirmed();
         setStatus("回复已发送，稍后确认点赞原帖…");
       }
       // Keep a variable, human-like pause between the confirmed reply and the
@@ -533,15 +871,21 @@
     }).reverse();
   }
 
-  async function fillSelected() {
-    if (pendingFill) return;
-    if (!sourceIsCurrent()) return invalidate("会话或草稿已变化，请重新生成");
+  async function fillSelected({ send = null } = {}) {
     const selected = state.candidates.find((candidate) => candidate.id === state.selectedId);
     if (!selected) return setStatus("请先选择候选回复", true);
+    return fillCandidate(selected, send);
+  }
+
+  async function fillCandidate(selected, send = null) {
+    if (pendingFill) return;
+    pendingSend = null;
+    if (!sourceIsCurrent()) return invalidate("会话或草稿已变化，请重新生成");
     const editor = source.editor;
     if (!editor) return setStatus("没有找到消息输入框，请点击输入区域后重试", true);
     if (source.owned && source.draft === selected.text) return setStatus("已回填此候选，无需重复填入；请检查后手动发送");
-    const operation = { source, text: selected.text, timer: null };
+    const operation = { source, text: selected.text, candidate: selected, timer: null };
+    pendingSend = send;
     pendingFill = operation;
     renderPanel();
     setGenerating(false);
@@ -608,13 +952,124 @@
       if (!sourceIsCurrent(operation.text)) return invalidate("回填核验失败：目标或草稿发生变化，请检查输入框；未自动重试或发送");
       source.draft = operation.text;
       source.owned = true;
+      const send = pendingSend;
+      pendingSend = null;
       pendingFill = null;
       renderPanel();
       setGenerating(false);
+      if (source.kind === "original-post") {
+        setStatus("已填入发帖框草稿（未发送）；请检查后手动点击发帖按钮");
+        onPostFilled(operation.candidate);
+        return;
+      }
+      if (send?.mode === "countdown") return startCountdown(send.seconds);
+      if (send?.mode === "immediate") return sendSelectedReply();
       setStatus(autoLike.isEnabled() && source.kind === "public-reply"
         ? "已回填输入框，可切换候选后再次回填；请检查后手动发送，发送成功后将打开原帖并自动点赞"
         : "已回填输入框，可切换候选后再次回填；请检查后手动发送");
     }, 150);
+  }
+
+  function sendSelectedReply() {
+    if (!source || source.kind !== "public-reply") return setStatus("一键发送仅支持公开帖子回复，请手动发送", true);
+    if (!sourceIsCurrent(source.draft)) return invalidate("一键发送前会话或草稿已变化，未发送");
+    const buttons = [...(source.dialog?.querySelectorAll('[data-testid^="tweetButton"]') || [])]
+      .filter(button => visible(button) && isEnabledSendButton(button));
+    if (buttons.length !== 1) return invalidate(buttons.length
+      ? "一键发送失败：检测到多个可用回复按钮，未发送"
+      : "一键发送失败：没有找到可用回复按钮，未发送");
+    try {
+      setStatus("已通过核验，正在点击回复按钮…");
+      buttons[0].click();
+    } catch (error) {
+      return invalidate(`一键发送失败：${error.message}`);
+    }
+    // When auto-like is enabled its existing controller owns the same send
+    // confirmation and the post-send workflow. Do not create a second poller.
+    if (autoLike.isPending()) return;
+    startSendConfirmation();
+  }
+
+  function startCountdown(seconds) {
+    clearCountdown();
+    const total = seconds * 1000;
+    countdown = { source, text: source.draft, total, deadline: Date.now() + total, timer: null };
+    countdown.timer = setInterval(checkCountdown, COUNTDOWN_TICK_MS);
+    checkCountdown();
+  }
+
+  // Hidden tabs keep counting against the deadline and still send when it passes.
+  function checkCountdown() {
+    if (!countdown) return;
+    if (source !== countdown.source || !sourceIsCurrent(countdown.text)) {
+      return invalidate("已取消自动发送（回复弹窗、目标或草稿已变化），未发送");
+    }
+    const remaining = countdown.deadline - Date.now();
+    if (remaining <= 0) return sendCountdownNow();
+    const seconds = Math.ceil(remaining / 1000);
+    ui.countdown = { seconds, progress: remaining / countdown.total, text: countdown.text };
+    setStatus(`将在 ${seconds} 秒后发送，可取消`);
+  }
+
+  function sendCountdownNow() {
+    if (!countdown) return;
+    clearCountdown();
+    sendSelectedReply();
+  }
+
+  function cancelCountdown() {
+    if (!countdown) return;
+    clearCountdown();
+    setStatus("已取消自动发送，草稿已保留，请手动检查后发送");
+  }
+
+  function clearCountdown() {
+    if (countdown?.timer) clearInterval(countdown.timer);
+    countdown = null;
+    ui.countdown = null;
+    renderPanel();
+  }
+
+  function startSendConfirmation() {
+    clearSendConfirmation();
+    sendConfirmation = { source, deadline: Date.now() + SEND_CONFIRMATION_TIMEOUT_MS, timer: null };
+    setStatus("已点击回复，正在等待 X 确认发送…");
+    sendConfirmation.timer = setInterval(checkSendConfirmation, 100);
+    checkSendConfirmation();
+  }
+
+  function checkSendConfirmation() {
+    if (!sendConfirmation) return;
+    const editor = sendConfirmation.source?.editor;
+    const confirmed = !editor?.isConnected || (editor.isConnected && !editorText(editor).trim());
+    if (confirmed) {
+      clearSendConfirmation();
+      releaseSentReply();
+      setStatus("回复已发送，页面已确认");
+      return;
+    }
+    if (Date.now() >= sendConfirmation.deadline) {
+      clearSendConfirmation();
+      invalidate("一键发送未确认，草稿已保留，未自动重试");
+    }
+  }
+
+  // A confirmed send completes this reply. Release it so later navigation is
+  // not reported as interrupted work and the next reply starts from a clean state.
+  function releaseSentReply() {
+    generation++;
+    source = null;
+    state = { candidates: [], decision: null, mode: "" };
+    renderPanel();
+  }
+
+  function clearSendConfirmation() {
+    if (sendConfirmation?.timer) clearInterval(sendConfirmation.timer);
+    sendConfirmation = null;
+  }
+
+  function isEnabledSendButton(button) {
+    return !!button && !button.disabled && button.getAttribute("aria-disabled") !== "true";
   }
 
   function findDmEditor() {
@@ -632,6 +1087,29 @@
   function hasVisibleReplyDialog() {
     const selector = '[data-testid^="tweetTextarea_"][contenteditable="true"][role="textbox"]';
     return [...document.querySelectorAll(selector)].some((editor) => visible(editor) && editor.closest('[role="dialog"]'));
+  }
+  function hasVisibleComposeDialog() {
+    return [...document.querySelectorAll('[role="dialog"]')].some((dialog) => {
+      if (!visible(dialog)) return false;
+      const editors = [...dialog.querySelectorAll('[data-testid^="tweetTextarea_"][contenteditable="true"][role="textbox"]')].filter(visible);
+      const posts = [...dialog.querySelectorAll('[data-testid="tweet"]')].filter(visible);
+      return editors.length >= 1 && posts.length === 0;
+    });
+  }
+  function isComposeRoute() {
+    return location.pathname === "/compose/post" || hasVisibleComposeDialog();
+  }
+  function hasVisibleTargetReplyDialog() {
+    return [...document.querySelectorAll('[role="dialog"]')].some((dialog) => {
+      if (!visible(dialog)) return false;
+      const editors = [...dialog.querySelectorAll('[data-testid^="tweetTextarea_"][contenteditable="true"][role="textbox"]')].filter(visible);
+      const posts = [...dialog.querySelectorAll('[data-testid="tweet"]')].filter(visible);
+      return editors.length >= 1 && posts.length >= 1;
+    });
+  }
+  function isComposeScene() {
+    if (isConversation() || hasVisibleTargetReplyDialog()) return false;
+    try { readComposeContext(); return true; } catch { return false; }
   }
   function visible(node) { return node.getClientRects().length && !node.closest('[aria-hidden="true"]'); }
   function readContext() {
@@ -675,18 +1153,35 @@
     ])].map(a => a.getAttribute('href'));
     return { kind: "public-reply", messages: [{ role: "them", text: text.trim() }], editor, target, dialog, textNode: texts[0], targetLinks };
   }
+
+  function readComposeContext() {
+    const onComposePage = location.pathname === "/compose/post";
+    if (!onComposePage && !hasVisibleComposeDialog()) throw new Error("请打开 /compose/post 或发帖弹窗后使用发帖模式");
+    const editors = [...document.querySelectorAll('[data-testid^="tweetTextarea_"][contenteditable="true"][role="textbox"]')]
+      .filter((node) => visible(node) && (onComposePage || node.closest('[role="dialog"]')));
+    if (!editors.length) throw new Error("读取失败：没有找到发帖输入框，请打开发帖弹窗或 /compose/post");
+    if (editors.length !== 1) throw new Error("读取失败：检测到多个发帖输入框，无法确定目标");
+    const editor = editors[0];
+    let dialog = editor.closest('[role="dialog"]');
+    if (dialog) {
+      while (dialog.parentElement?.closest('[role="dialog"]')) dialog = dialog.parentElement.closest('[role="dialog"]');
+      const posts = [...dialog.querySelectorAll('[data-testid="tweet"]')].filter(visible);
+      if (posts.length) throw new Error("读取失败：当前弹窗含目标帖子（回复弹窗），发帖模式只支持发帖框");
+    }
+    return { kind: "original-post", editor, dialog, target: dialog || editor };
+  }
   function contextKey(context) {
     return JSON.stringify({ kind: context.kind, messages: context.messages, targetLinks: context.targetLinks });
   }
   function sourceIsCurrent(expectedDraft = source?.draft) {
     if (!source || source.url !== location.href) return false;
     try {
-      const context = autoLike.enrichContext(readContext());
+      const context = source.kind === "original-post" ? readComposeContext() : autoLike.enrichContext(readContext());
       return source.key === contextKey(context)
         && source.editor === context.editor
         && source.target === context.target
         && source.dialog === context.dialog
-        && source.textNode === context.textNode
+        && (source.kind === "original-post" || source.textNode === context.textNode)
         && expectedDraft === editorText(context.editor);
     } catch {
       return false;
@@ -696,6 +1191,9 @@
     generation++;
     clearTimeout(pendingFill?.timer);
     pendingFill = null;
+    pendingSend = null;
+    clearCountdown();
+    clearSendConfirmation();
     autoLike.cancel(true);
     source = null;
     state = { candidates: [], decision: null, mode: "" };
@@ -747,20 +1245,35 @@
     let href = location.href;
     const sync = () => {
       if (href !== location.href) {
+        // Work started on the new URL (an auto generation can start before this
+        // poll notices X's /compose/post navigation) belongs to the new page.
+        const startedHere = source?.url === location.href;
         const hadWork = source !== null;
+        const wasPost = source?.kind === "original-post";
         href = location.href;
         dismissed = false;
+        if (isComposeScene()) loadPostCache();
         // X commonly closes the reply modal and changes back to the timeline
         // immediately after a successful send. Preserve the one-shot like
         // confirmation across that expected transition; the target is still
         // checked by node identity or its captured status ID before clicking.
         if (autoLike.isPending()) {
           autoLike.handleRouteChange();
+        } else if (sendConfirmation) {
+          // A successful X send can close the modal and change the SPA route;
+          // keep the one-shot confirmation alive until the editor disappears.
+          sendConfirmation.source.url = location.href;
+          checkSendConfirmation();
+        } else if (startedHere) {
+          // Keep the current work; nothing from an older page is pending.
+        } else if (countdown) {
+          invalidate("已取消自动发送（页面已切换），未发送");
         } else {
-          invalidate(hadWork ? "页面已切换，旧回复已停止。请点击下方按钮重新生成。" : READY_TEXT, hadWork);
+          invalidate(hadWork ? (wasPost ? "页面已切换，旧发帖任务已停止。请重新生成。" : "页面已切换，旧回复已停止。请点击下方按钮重新生成。") : READY_TEXT, hadWork);
         }
       }
-      ui.routeHidden = !(isConversation() || (isReplyRoute() && [...document.querySelectorAll('[role="dialog"]')].some(visible)));
+      consumeAutoTrigger();
+      ui.routeHidden = !(isConversation() || isComposeRoute() || (isReplyRoute() && [...document.querySelectorAll('[role="dialog"]')].some(visible)));
       renderPanel();
     };
     sync();

@@ -1,17 +1,42 @@
 {
   "manifest_version": 3,
   "name": "X 快速回复（预览）",
-  "version": "0.4.3",
-  "description": "读取当前 X 帖子回复弹窗或私信会话，生成并选择回复后回填草稿，可在发送后自动点赞。",
-  "permissions": ["storage", "scripting"],
-  "host_permissions": ["https://x.com/*", "https://twitter.com/*", "http://127.0.0.1/*", "http://localhost/*"],
-  "background": {"service_worker": "src/service-worker.js", "type": "module"},
+  "version": "0.6.0",
+  "description": "读取当前 X 帖子回复弹窗或私信会话生成并回填回复草稿，可一键倒计时发送公开回复；独立发帖助手从热榜选题生成帖文并回填发帖草稿。",
+  "permissions": [
+    "storage",
+    "scripting"
+  ],
+  "host_permissions": [
+    "https://x.com/*",
+    "https://twitter.com/*",
+    "http://127.0.0.1/*",
+    "http://localhost/*"
+  ],
+  "background": {
+    "service_worker": "src/service-worker.js",
+    "type": "module"
+  },
   "options_page": "src/options.html",
-  "action": {"default_title": "X 快速回复", "default_popup": "src/popup.html"},
-  "content_scripts": [{
-    "matches": ["https://x.com/*", "https://twitter.com/*"],
-    "js": ["src/vendor/react.production.min.js", "src/vendor/react-dom.production.min.js", "src/content.js"],
-    "css": ["src/content.css"],
-    "run_at": "document_idle"
-  }]
+  "action": {
+    "default_title": "X 快速回复",
+    "default_popup": "src/popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://x.com/*",
+        "https://twitter.com/*"
+      ],
+      "js": [
+        "src/vendor/react.production.min.js",
+        "src/vendor/react-dom.production.min.js",
+        "src/content.js"
+      ],
+      "css": [
+        "src/content.css"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
 }
