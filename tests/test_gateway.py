@@ -11,8 +11,9 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from gateway import (GatewayError, Models, Settings, SCHEMA, make_server,
-                     parse_hot_topics, post_json, validate_endpoint,
-                     validate_post_generate_request, validate_request)
+                     parse_hot_topics, parse_hot_tweets, post_json,
+                     validate_endpoint, validate_post_generate_request,
+                     validate_request)
 
 
 def request():
@@ -340,10 +341,10 @@ class PostModelTests(unittest.TestCase):
             return {"choices": [{"finish_reason": "stop", "message": {"content": json.dumps({
                 "candidates": self.post_items()})}}]}
         return Models(settings(), transport or default_transport,
-                      fetch or (lambda timeout: self.topics())), calls
+                      fetch or (lambda timeout, source: self.topics())), calls
 
     def test_fetch_returns_top_topics_from_the_only_data_source(self):
-        models, _ = self.models(fetch=lambda timeout: parse_hot_topics(
+        models, _ = self.models(fetch=lambda timeout, source: parse_hot_topics(
             {"topics": [{"rank": i, **{k: v for k, v in t.items() if k != "rank"}} for i, t in enumerate(self.topics(), 1)]}))
         result = models.topics_fetch(self.fetch_request())
         self.assertEqual(result["schemaVersion"], "quick-post.v1")
@@ -443,13 +444,60 @@ class PostModelTests(unittest.TestCase):
                 Models(settings(), lambda *a: self.fail("unexpected network"))
 
     def test_fetch_failure_propagates_its_stage_and_skips_decision(self):
-        def broken_fetch(timeout):
+        def broken_fetch(timeout, source):
             raise GatewayError("话题榜单获取失败（阶段 topics.fetch）：HTTP 404", 502)
         models, calls = self.models(fetch=broken_fetch,
                                     transport=lambda *a: self.fail("must stop before model call"))
         with self.assertRaisesRegex(GatewayError, "topics.fetch"):
             models.topics_fetch(self.fetch_request())
         self.assertEqual(calls, [])
+
+
+class TweetBoardTests(unittest.TestCase):
+    """Hot tweets board doubles normalized into the shared topic shape."""
+
+    def tweets_payload(self):
+        return {"updatedAt": 1, "items": [
+            {"id": "w1", "contentType": "note_tweet", "rank": 1, "category": "AI",
+             "content": "一条很热的推文正文，讲的是大家都在聊的事。", "comments": 836},
+            {"id": "w2", "contentType": "article", "rank": 2, "category": None,
+             "articleTitle": "长文标题", "articlePreview": "长文预览片段。", "comments": 12},
+        ]}
+
+    def test_hot_tweets_are_normalized_into_topic_shape(self):
+        topics = parse_hot_tweets(self.tweets_payload())
+        self.assertEqual([t["id"] for t in topics], ["w1", "w2"])
+        self.assertEqual(topics[0]["title"], "一条很热的推文正文，讲的是大家都在聊的事。")
+        self.assertEqual(topics[0]["repliesCount"], 836)
+        self.assertEqual(topics[0]["tags"], ["AI"])
+        self.assertEqual(topics[1]["title"], "长文标题")
+        self.assertIn("长文预览片段。", topics[1]["summary"])
+        self.assertEqual(topics[1]["tags"], [])
+
+    def test_empty_or_invalid_tweets_board_stops_with_its_stage(self):
+        for bad in [{}, {"items": []}, {"items": [{"id": "w1", "rank": 1, "content": "", "comments": 0}]},
+                    {"items": [{"id": "w1", "rank": 1, "content": "正文", "comments": -3}]}]:
+            with self.subTest(bad=str(bad)[:60]), self.assertRaises(GatewayError) as caught:
+                parse_hot_tweets(bad)
+            self.assertIn("topics.fetch.parse", str(caught.exception))
+
+    def test_topics_fetch_requires_an_explicit_board_and_reports_which_one(self):
+        seen = []
+        models = Models(settings(), lambda *a: self.fail("unexpected model call"),
+                        lambda timeout, source: seen.append(source) or [])
+        with self.assertRaisesRegex(GatewayError, "source"):
+            models.topics_fetch({"schemaVersion": "quick-post.v1", "kind": "original-post", "source": "blogs"})
+
+        def fetch(timeout, source):
+            seen.append(source)
+            return [{"id": "w1", "rank": 1, "title": "推文标题", "summary": "正文", "tags": [], "repliesCount": 1}]
+        models = Models(settings(), lambda *a: self.fail("unexpected model call"), fetch)
+        result = models.topics_fetch({"schemaVersion": "quick-post.v1", "kind": "original-post", "source": "tweets"})
+        self.assertEqual(result["source"], "xzhishu-tweets-hot")
+        self.assertEqual(seen[-1], "tweets")
+        result = models.topics_fetch({"schemaVersion": "quick-post.v1", "kind": "original-post"})
+        self.assertEqual(result["source"], "xzhishu-topics-hot")
+        self.assertEqual(seen[-1], "topics")
 
 
 if __name__ == '__main__':

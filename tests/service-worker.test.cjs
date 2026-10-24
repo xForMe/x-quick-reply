@@ -270,7 +270,7 @@ function postRuntime(responses, { tabUrl = 'https://x.com/compose/post', setting
   vm.runInNewContext(source, context);
   const receive = (message, sender = senderFor('https://x.com/compose/post')) => new Promise(resolve => listener(message, sender, resolve));
   return { calls, storage, receive,
-    batch: () => receive({ type: 'GENERATE_POST_BATCH' }),
+    batch: (source) => receive({ type: 'GENERATE_POST_BATCH', source }),
     list: () => receive({ type: 'LIST_POST_CACHE' }),
     cacheOp: (op, id) => receive({ type: 'POST_CACHE_OP', op, id }) };
 }
@@ -376,4 +376,16 @@ test('post messages require a compose surface on the current tab', async () => {
   assert.equal(result.ok, false);
   assert.match(result.error, /发帖/);
   assert.equal(app.calls.length, 0);
+});
+
+test('the board source is passed explicitly and never switched on failure', async () => {
+  const app = postRuntime([topicsResponse(), { body: topicDecision() }, { body: postCandidates() }]);
+  const result = await app.batch('tweets');
+  assert.equal(result.ok, true, result.error);
+  assert.equal(JSON.parse(app.calls[0].options.body).source, 'tweets');
+  const invalid = postRuntime([]);
+  const rejected = await invalid.batch('blogs');
+  assert.equal(rejected.ok, false);
+  assert.match(rejected.error, /topics|tweets/);
+  assert.equal(invalid.calls.length, 0);
 });

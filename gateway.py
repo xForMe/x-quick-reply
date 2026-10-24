@@ -23,9 +23,12 @@ POST_PROMPT_VERSION = "post-policy.v1"
 NONE = "__none__"
 MAX_BODY = 100_000
 TONES = {"natural", "concise", "polite", "professional"}
-# Fixed single data source for quick-post topics. No fallback source is allowed.
+# Fixed data sources for quick-post. The board is chosen explicitly per
+# request (topics or tweets); never switched automatically on failure.
 XZHISHU_TOPICS_URL = ("https://www.xzhishu.com/api/v1/topics/hot"
                      "?limit=5&period=24h&dimension=heat&detail=1")
+XZHISHU_TWEETS_URL = ("https://www.xzhishu.com/api/v1/rankings/tweets/leaderboard"
+                      "?period=24h&dimension=heat&page=1&pageSize=5")
 
 
 class GatewayError(Exception):
@@ -320,9 +323,13 @@ class Models:
 
     def topics_fetch(self, value):
         validate_post_head(value)
+        board = value.get("source", "topics")
+        if board not in {"topics", "tweets"}:
+            raise GatewayError("source 必须为 topics 或 tweets", 400)
         started = time.monotonic()
-        topics = self.fetch(self.settings.timeout)
-        return {"schemaVersion": POST_SCHEMA, "source": "xzhishu-topics-hot",
+        topics = self.fetch(self.settings.timeout, board)
+        return {"schemaVersion": POST_SCHEMA,
+                "source": "xzhishu-topics-hot" if board == "topics" else "xzhishu-tweets-hot",
                 "fetchedAt": int(time.time() * 1000), "topics": topics,
                 "meta": {"elapsedMs": round((time.monotonic()-started)*1000)}}
 
@@ -477,9 +484,53 @@ def parse_hot_topics(data):
     return topics
 
 
-def fetch_hot_topics(timeout):
-    request = urllib.request.Request(XZHISHU_TOPICS_URL, headers={
+def parse_hot_tweets(data):
+    if not isinstance(data, dict) or not isinstance(data.get("items"), list):
+        raise GatewayError("热门推文榜响应结构无效（阶段 topics.fetch.parse）")
+    raw_items = data["items"]
+    if not raw_items:
+        raise GatewayError("热门推文榜返回 0 条（阶段 topics.fetch.parse）")
+    topics, seen = [], set()
+    for item in raw_items[:5]:
+        if not isinstance(item, dict):
+            raise GatewayError("热门推文榜条目结构无效（阶段 topics.fetch.parse）")
+        content = item.get("content") if isinstance(item.get("content"), str) else ""
+        article_title = item.get("articleTitle") if isinstance(item.get("articleTitle"), str) else ""
+        article_preview = item.get("articlePreview") if isinstance(item.get("articlePreview"), str) else ""
+        if not content.strip() and not article_title.strip():
+            raise GatewayError("热门推文榜条目结构无效（阶段 topics.fetch.parse）")
+        # Normalize one hot tweet into the same topic shape the rest of the
+        # pipeline uses. Source text over the contract bound is trimmed as a
+        # documented material bound (same practice as DM message slicing).
+        title = article_title.strip() or content.strip()[:120]
+        summary = ((article_title.strip() + "\n" + article_preview.strip()).strip()
+                   if article_title.strip() else content.strip())[:2000]
+        category = item.get("category")
+        topic = clean_topic({
+            "id": item.get("id"), "rank": item.get("rank"),
+            "title": title, "summary": summary,
+            "tags": [category] if isinstance(category, str) and category.strip() else [],
+            "repliesCount": item.get("comments"),
+        }, "热门推文榜条目结构无效（阶段 topics.fetch.parse）", 502)
+        if topic["id"] in seen:
+            raise GatewayError("热门推文榜条目 ID 重复（阶段 topics.fetch.parse）")
+        seen.add(topic["id"])
+        topics.append(topic)
+    return topics
+
+
+def fetch_hot_topics(timeout, source):
+    if source == "tweets":
+        url, label = XZHISHU_TWEETS_URL, "热门推文榜"
+        parse = parse_hot_tweets
+    elif source == "topics":
+        url, label = XZHISHU_TOPICS_URL, "热门话题榜"
+        parse = parse_hot_topics
+    else:
+        raise GatewayError("source 必须为 topics 或 tweets", 400)
+    request = urllib.request.Request(url, headers={
         "Accept": "application/json",
+        "Referer": "https://www.xzhishu.com/rankings/" + ("tweets" if source == "tweets" else "topics"),
         "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                        "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"),
     }, method="GET")
@@ -487,15 +538,15 @@ def fetch_hot_topics(timeout):
         with urllib.request.build_opener(NoRedirect()).open(request, timeout=timeout) as response:
             raw = response.read(1_000_001)
             if len(raw) > 1_000_000:
-                raise GatewayError("话题榜单响应过大（阶段 topics.fetch）")
+                raise GatewayError(f"{label}响应过大（阶段 topics.fetch）")
             data = json.loads(raw)
     except urllib.error.HTTPError as exc:
-        raise GatewayError(f"话题榜单获取失败（阶段 topics.fetch）：HTTP {exc.code}") from None
+        raise GatewayError(f"{label}获取失败（阶段 topics.fetch）：HTTP {exc.code}") from None
     except (urllib.error.URLError, TimeoutError, socket.timeout):
-        raise GatewayError("话题榜单获取失败（阶段 topics.fetch）：网络失败或超时", 504) from None
+        raise GatewayError(f"{label}获取失败（阶段 topics.fetch）：网络失败或超时", 504) from None
     except (ValueError, UnicodeError):
-        raise GatewayError("话题榜单响应不是合法 JSON（阶段 topics.fetch.parse）") from None
-    return parse_hot_topics(data)
+        raise GatewayError(f"{label}响应不是合法 JSON（阶段 topics.fetch.parse）") from None
+    return parse(data)
 
 
 def validate_post_head(value):

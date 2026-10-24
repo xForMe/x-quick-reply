@@ -1091,3 +1091,18 @@ test('reply and post entries refuse the wrong scene instead of opening a mixed p
     assert.match(wrong.error, /发帖弹窗|compose/);
   } finally { a.close(); }
 });
+
+test('the panel offers the hot tweets board as an explicit second action', async () => {
+  const a = postApp();
+  try {
+    a.open('OPEN_QUICK_POST');
+    await new Promise(resolve => setTimeout(resolve, 20));
+    const ghost = a.panel().querySelector('[data-action="post-batch-tweets"]');
+    assert.ok(ghost, '需要显式的热门推文榜入口');
+    assert.match(ghost.textContent, /热门推文榜/);
+    ghost.click();
+    await new Promise(resolve => setTimeout(resolve, 20));
+    const batch = a.calls.find((message) => message.type === 'GENERATE_POST_BATCH');
+    assert.equal(batch.source, 'tweets');
+  } finally { a.close(); }
+});

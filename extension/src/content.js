@@ -205,7 +205,10 @@
         copyDiagnostics();
         break;
       case "post-batch":
-        generateBatch();
+        generateBatch("topics");
+        break;
+      case "post-batch-tweets":
+        generateBatch("tweets");
         break;
       case "post-fill":
         fillPostItem(argument);
@@ -282,9 +285,11 @@
       h("div", { className: `qr-status${props.statusError ? " error" : ""}`, "data-role": "status", role: "status" }, props.status),
       postMode ? h(React.Fragment, null,
         h("button", { type: "button", className: "qr-primary", "data-action": "post-batch", disabled: props.generating || props.pendingFill,
-          onClick: () => props.onAction("post-batch") }, props.generating ? "生成中，请稍候…" : "生成新一批（热榜 5 选 1）"),
+          onClick: () => props.onAction("post-batch") }, props.generating ? "生成中，请稍候…" : "生成新一批（热门话题榜 5 选 1）"),
+        h("button", { type: "button", className: "qr-ghost", "data-action": "post-batch-tweets", disabled: props.generating || props.pendingFill,
+          onClick: () => props.onAction("post-batch-tweets") }, "改用热门推文榜生成"),
         props.postBatch?.selectedTopic ? h("div", { className: "qr-reason" },
-          `本批话题：${props.postBatch.selectedTopic.title}（决策选定）${props.postBatch.evicted ? ` · 已自动清理 ${props.postBatch.evicted} 条` : ""}`) : null,
+          `本批来源：${props.postBatch.board || "热门话题榜"} · 素材：${props.postBatch.selectedTopic.title}（决策选定）${props.postBatch.evicted ? ` · 已自动清理 ${props.postBatch.evicted} 条` : ""}`) : null,
         h("div", { className: "qr-cache-head" },
           h("span", null, `候选缓存池 · ${props.postCache.length} 条`),
           h("button", { type: "button", "data-action": "post-clear", disabled: props.pendingFill || !props.postCache.length,
@@ -354,11 +359,12 @@
 
   // ---- quick-post batch flow: topics fetch -> decision -> 5 posts -> cache ----
 
-  async function generateBatch() {
+  async function generateBatch(board = "topics") {
     if (pendingFill) return;
     const current = ++generation;
     source = null;
     renderPanel();
+    const boardLabel = board === "tweets" ? "热门推文榜" : "热门话题榜";
     let response;
     try {
       const context = readComposeContext();
@@ -367,8 +373,8 @@
         target: context.target, dialog: context.dialog, textNode: null, targetLinks: [],
         draft: editorText(context.editor) };
       setGenerating(true);
-      setStatus("正在获取热榜话题、决策并生成帖文，请稍候…");
-      response = await chrome.runtime.sendMessage({ type: "GENERATE_POST_BATCH" });
+      setStatus(`正在从${boardLabel}获取 5 条、决策并生成帖文，请稍候…`);
+      response = await chrome.runtime.sendMessage({ type: "GENERATE_POST_BATCH", source: board });
     } catch (error) {
       if (current !== generation) return;
       if (isInvalidContext(error)) return invalidate(INVALID_CONTEXT_TEXT);
@@ -384,7 +390,8 @@
       renderPanel();
       return setStatus("决策拒选：5 条话题均不合适（__none__），未生成帖文；可稍后重新生成", true);
     }
-    postBatch = { selectedTopic: response.selectedTopic, evicted: response.evicted };
+    postBatch = { selectedTopic: response.selectedTopic, evicted: response.evicted,
+      board: response.source === "xzhishu-tweets-hot" ? "热门推文榜" : "热门话题榜" };
     if (response.cacheError) {
       // The batch is usable this session but must never be presented as cached.
       postCache = response.candidates.map((candidate) => ({ id: candidate.id, text: candidate.text,
@@ -394,7 +401,7 @@
       return setStatus(`${response.cacheError}。本批候选仅本次可用（标注“未入缓存”），填入后不保留到下次`, true);
     }
     postCache = response.cache;
-    let text = `本批话题：${response.selectedTopic.title}（决策选定）。已生成 ${response.candidates.length} 条帖文并入缓存池（共 ${response.cache.length} 条），每次选 1 条填入。`;
+    let text = `本批来源：${postBatch.board}。选定素材：${response.selectedTopic.title}（决策选定）。已生成 ${response.candidates.length} 条帖文并入缓存池（共 ${response.cache.length} 条），每次选 1 条填入。`;
     if (response.evicted) text += ` 缓存已满，已自动清理 ${response.evicted} 条（先已发过的，再最旧的）。`;
     setStatus(text);
     renderPanel();

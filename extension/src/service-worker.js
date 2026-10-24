@@ -10,7 +10,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   authorizeSender(sender, message.type === "GENERATE_REPLIES" ? kind : "original-post").then(async (source) => {
     switch (message.type) {
       case "GENERATE_REPLIES": return generateReplies(message.context, source);
-      case "GENERATE_POST_BATCH": return generatePostBatch(source);
+      case "GENERATE_POST_BATCH": return generatePostBatch(source, message.source);
       case "LIST_POST_CACHE": return { ok: true, ...(await readCache()) };
       case "POST_CACHE_OP": return applyCacheOp(message);
     }
@@ -76,11 +76,14 @@ async function generateReplies(context, source) {
 // One button runs the whole quick-post batch: topics fetch -> decision ->
 // post generation -> cache append. Any failing stage stops the chain and is
 // reported with its stage; there is no retry, fallback source or mock output.
-async function generatePostBatch(source) {
+async function generatePostBatch(source, board) {
   const settings = await loadSettings();
   if (typeof settings.postPrompt !== "string" || !settings.postPrompt.trim() || settings.postPrompt.length > 3000) throw new Error("请在扩展设置中填写发帖提示词（1–3000 字符）");
+  // The board is chosen explicitly by the user (topics or tweets). A failing
+  // board is reported as-is; the worker never switches sources by itself.
+  if (board !== undefined && board !== "topics" && board !== "tweets") throw new Error("话题来源无效：只能是 topics 或 tweets");
   const base = gatewayBase(settings);
-  const head = { schemaVersion: POST_SCHEMA, kind: "original-post" };
+  const head = { schemaVersion: POST_SCHEMA, kind: "original-post", source: board || "topics" };
 
   const fetched = await postJson(`${base}/v1/posts/topics/fetch`, head, settings.timeoutMs);
   if (fetched?.schemaVersion !== POST_SCHEMA) throw new Error("话题接口协议版本无效，请重启新版网关并更新扩展");

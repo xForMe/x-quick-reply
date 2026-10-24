@@ -40,3 +40,5 @@
 .qr-countdown-actions button { flex: 1; padding: 7px; border-radius: 999px; font-weight: 700; }
 .qr-send-now { border: 0; color: #fff; background: #0f7a4b; }
 .qr-cancel-send { border: 1px solid #cfd9de; color: #0f1419; background: #fff; }
+.qr-ghost { width: 100%; margin-top: 6px; padding: 6px 8px; border: 1px solid #cfd9de; border-radius: 999px; background: #fff; color: #536471; font-size: 12px; }
+.qr-ghost:disabled { cursor: not-allowed; opacity: .45; }
