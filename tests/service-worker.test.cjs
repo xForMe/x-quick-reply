@@ -70,7 +70,17 @@ test('one-click setting is returned but never sent to the model request', async 
   const result = await app.send(senderFor('https://x.com/compose/post'), 'public-reply');
   assert.equal(result.ok,true,result.error);
   assert.equal(result.oneClickReply,true);
+  assert.equal(result.oneClickCountdownSeconds,10);
   assert.equal(JSON.parse(app.calls[0].options.body).oneClickReply,undefined);
+  assert.equal(JSON.parse(app.calls[0].options.body).oneClickCountdownSeconds,undefined);
+});
+
+test('invalid one-click countdown stops before any model request', async () => {
+  for (const oneClickCountdownSeconds of [2,61,2.5,'10',null]) {
+    const app = runtime([], {settings:{oneClickCountdownSeconds}});
+    const result = await app.send();
+    assert.equal(result.ok,false); assert.match(result.error,/倒计时设置无效/); assert.equal(app.calls.length,0);
+  }
 });
 
 test('invalid saved prompt stops before any model request',async()=>{
@@ -163,7 +173,7 @@ test('actual page and background scripts generate and fill after a home-to-reply
     w.document.body.append(dialog);
     let sent=0;w.document.querySelector('[data-testid="tweetButton"]').onclick=()=>sent++;
     w.document.querySelector('[data-action="generate"]').click();
-    await new Promise(resolve=>setTimeout(resolve,180));
+    await new Promise(resolve=>setTimeout(resolve,600));
     const status=w.document.querySelector('[data-role="status"]').textContent;
     assert.equal(worker.calls.length,2,status);
     assert.equal(w.document.querySelector('[role="textbox"]').textContent,candidates[0].text);

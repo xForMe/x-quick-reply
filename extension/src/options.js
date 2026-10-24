@@ -41,16 +41,20 @@ function Options() {
     const replyPrompt = form.replyPrompt.trim();
     const replyExamples = form.replyExamples.trim();
     const candidateCount = Number(form.candidateCount);
+    const oneClickCountdownSeconds = Number(form.oneClickCountdownSeconds);
     if (!/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?\/?$/.test(gatewayUrl)) return report("仅支持 http://localhost 或 http://127.0.0.1", true);
     if (!Number.isInteger(candidateCount) || candidateCount < 2 || candidateCount > 5) return report("候选数量必须是 2–5 的整数", true);
     if (!["natural", "concise", "polite", "professional"].includes(form.tone)) return report("默认语气无效", true);
     if (!replyPrompt || replyPrompt.length > 3000) return report("整体回复提示词必须为 1–3000 字符", true);
     if (replyExamples.length > 3000) return report("我的回复示例不能超过 3000 字符", true);
+    if (!/^\d+$/.test(String(form.oneClickCountdownSeconds).trim()) || oneClickCountdownSeconds < 3 || oneClickCountdownSeconds > 60) {
+      return report("发送前倒计时必须是 3–60 的整数秒", true);
+    }
     setSaving(true);
     try {
       if (typeof form.autoLikeAfterReply !== "boolean" || typeof form.oneClickReply !== "boolean") return report("回复开关设置无效，请重新勾选后保存", true);
-      await chrome.storage.local.set({ gatewayUrl, tone: form.tone, candidateCount, replyPrompt, replyExamples, autoLikeAfterReply: form.autoLikeAfterReply, oneClickReply: form.oneClickReply });
-      setForm(previous => ({ ...previous, gatewayUrl, candidateCount, replyPrompt, replyExamples }));
+      await chrome.storage.local.set({ gatewayUrl, tone: form.tone, candidateCount, replyPrompt, replyExamples, autoLikeAfterReply: form.autoLikeAfterReply, oneClickReply: form.oneClickReply, oneClickCountdownSeconds });
+      setForm(previous => ({ ...previous, gatewayUrl, candidateCount, replyPrompt, replyExamples, oneClickCountdownSeconds }));
       report("已保存，下次生成生效。");
     } catch (saveError) {
       report(`保存设置失败：${saveError.message}`, true);
@@ -84,8 +88,10 @@ function Options() {
       onChange: event => update("autoLikeAfterReply", event.target.checked) }), " 发送公开回复后打开原帖并自动点赞"),
     h("small", null, "仅在你实际点击 X 的发送按钮、且发送结果得到页面确认后执行；私信不适用。默认关闭，点赞失败不会重试。"),
     h("label", null, h("input", { id: "oneClickReply", type: "checkbox", checked: form.oneClickReply === true, disabled: loading || saving,
-      onChange: event => update("oneClickReply", event.target.checked) }), " 一键生成并发送公开回复"),
-    h("small", null, "默认关闭。开启后，只有你主动点击扩展面板的“一键”按钮才会生成、回填并点击一次 X 回复按钮；打开帖子或私信不会自动发送。发送确认失败不重试。"),
+      onChange: event => update("oneClickReply", event.target.checked) }), " 一键回复：点击帖子“回复”后自动生成，并在倒计时后发送公开回复"),
+    field("发送前倒计时（3–60 秒）", h("input", { id: "oneClickCountdownSeconds", type: "number", min: 3, max: 60, step: 1, value: form.oneClickCountdownSeconds,
+      disabled: loading || saving || form.oneClickReply !== true, onChange: event => update("oneClickCountdownSeconds", event.target.value) })),
+    h("small", null, "默认关闭。只有你点击 X 帖子上的“回复”按钮才会触发：自动生成、按百炼选中的候选回填，倒计时结束后点击一次 X 回复按钮。倒计时期间可取消或立即发送，点其他候选会替换并立即发送；修改草稿、关闭弹窗或切换页面会取消。直接打开回复链接、面板主按钮和私信都不会自动发送。发送确认失败不重试。"),
     h("button", { id: "resetPrompt", type: "button", disabled: loading || saving, onClick: () => { update("replyPrompt", DEFAULT_REPLY_PROMPT); report("已恢复默认提示词，请点击保存。"); } }, "恢复默认提示词"),
     h("small", null, "恢复只修改上方文本，点击“保存”后生效。"),
     h("button", { id: "save", type: "button", disabled: loading || saving || loadFailed, onClick: save }, saving ? "保存中…" : "保存"),

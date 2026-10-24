@@ -32,6 +32,9 @@ async function generateReplies(context, source) {
   const settings = { ...DEFAULTS, ...(await chrome.storage.local.get(DEFAULTS)) };
   if (typeof settings.autoLikeAfterReply !== "boolean") throw new Error("自动点赞开关设置无效，请重新保存扩展设置");
   if (typeof settings.oneClickReply !== "boolean") throw new Error("一键回复开关设置无效，请重新保存扩展设置");
+  if (!Number.isInteger(settings.oneClickCountdownSeconds) || settings.oneClickCountdownSeconds < 3 || settings.oneClickCountdownSeconds > 60) {
+    throw new Error("一键回复倒计时设置无效（需 3–60 秒整数），请重新保存扩展设置");
+  }
   if (typeof settings.replyPrompt !== "string" || !settings.replyPrompt.trim() || settings.replyPrompt.length > 3000) throw new Error("请在扩展设置中填写整体回复提示词（1–3000 字符）");
   const request = {
     schemaVersion: "quick-reply.v2",
@@ -56,7 +59,8 @@ async function generateReplies(context, source) {
   const decision = await postJson(`${base}/v1/replies/decide`, { ...request, candidates }, settings.timeoutMs);
   const validDecision = validateDecision(decision, candidates);
   return { ok: true, mode: "gateway", candidates, decision: validDecision, generation: generated.meta,
-    autoLikeAfterReply: settings.autoLikeAfterReply, oneClickReply: settings.oneClickReply };
+    autoLikeAfterReply: settings.autoLikeAfterReply, oneClickReply: settings.oneClickReply,
+    oneClickCountdownSeconds: settings.oneClickCountdownSeconds };
 }
 
 async function postJson(url, body, timeoutMs) {

@@ -14,3 +14,14 @@
 .qr-candidate em { color: #0f7a4b; font-size: 12px; font-style: normal; }
 .qr-reason { color: #536471; font-size: 12px; }
 .qr-diagnostics { margin-top: 10px; padding: 5px; border: 0; color: #536471; background: transparent; text-decoration: underline; }
+.qr-countdown { margin-top: 10px; padding: 10px; border: 1px solid #0f7a4b; border-radius: 10px; background: #effaf4; }
+.qr-countdown-head { display: flex; justify-content: space-between; align-items: center; color: #0f7a4b; font-size: 12px; }
+.qr-countdown-head strong { color: #0f1419; font-size: 22px; font-variant-numeric: tabular-nums; }
+.qr-countdown-bar { height: 4px; margin: 6px 0 8px; overflow: hidden; border-radius: 4px; background: #cdeedd; }
+.qr-countdown-bar i { display: block; height: 100%; background: #0f7a4b; }
+.qr-countdown-text { margin-bottom: 4px; color: #0f1419; }
+.qr-countdown small { color: #536471; font-size: 12px; }
+.qr-countdown-actions { display: flex; gap: 8px; margin-top: 8px; }
+.qr-countdown-actions button { flex: 1; padding: 7px; border-radius: 999px; font-weight: 700; }
+.qr-send-now { border: 0; color: #fff; background: #0f7a4b; }
+.qr-cancel-send { border: 1px solid #cfd9de; color: #0f1419; background: #fff; }

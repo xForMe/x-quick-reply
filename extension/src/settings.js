@@ -15,5 +15,6 @@ export const DEFAULTS = Object.freeze({
   replyExamples: "",
   autoLikeAfterReply: false,
   oneClickReply: false,
+  oneClickCountdownSeconds: 10,
   timeoutMs: 100000
 });

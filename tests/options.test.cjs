@@ -33,7 +33,22 @@ test('first use shows the chosen humorous prompt and saves the full edited prefe
     assert.equal(a.writes[0].replyExamples,'这句我会回：先忙你的。');
     assert.equal(a.writes[0].autoLikeAfterReply,true);
     assert.equal(a.writes[0].oneClickReply,true);
+    assert.equal(a.writes[0].oneClickCountdownSeconds,10);
     assert.match(a.field('status').textContent,/下次生成生效/);
+  }finally{a.close();}
+});
+test('one-click countdown is disabled while off and saves only 3-60 whole seconds',async()=>{
+  const a=await app();
+  try{
+    assert.equal(a.field('oneClickCountdownSeconds').value,'10');
+    assert.equal(a.field('oneClickCountdownSeconds').disabled,true);
+    a.set('oneClickReply',true);
+    assert.equal(a.field('oneClickCountdownSeconds').disabled,false);
+    for(const value of ['','2','61','2.5','abc']){
+      a.set('oneClickCountdownSeconds',value);await a.save();assert.equal(a.writes.length,0);assert.match(a.field('status').textContent,/倒计时/);
+    }
+    a.set('oneClickCountdownSeconds','15');await a.save();
+    assert.equal(a.writes.length,1);assert.equal(a.writes[0].oneClickCountdownSeconds,15);
   }finally{a.close();}
 });
 test('stored custom prompt is preserved; resetting requires an explicit save',async()=>{
