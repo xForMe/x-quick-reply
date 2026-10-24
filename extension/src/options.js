@@ -1,4 +1,4 @@
-import { DEFAULTS, DEFAULT_REPLY_PROMPT, DEFAULT_POST_PROMPT } from "./settings.js";
+import { DEFAULTS, DEFAULT_REPLY_PROMPT, DEFAULT_POST_PROMPT, POST_CATEGORY_OPTIONS } from "./settings.js";
 
 document.addEventListener("DOMContentLoaded", () => {
   if (!globalThis.React || !globalThis.ReactDOM) throw new Error("React runtime 未加载，无法初始化扩展设置");
@@ -44,6 +44,7 @@ function Options() {
     const replyExamples = form.replyExamples.trim();
     const postPrompt = form.postPrompt.trim();
     const postExamples = form.postExamples.trim();
+    const postCategories = Array.isArray(form.postCategories) ? form.postCategories : [];
     const candidateCount = Number(form.candidateCount);
     const oneClickCountdownSeconds = Number(form.oneClickCountdownSeconds);
     if (!/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?\/?$/.test(gatewayUrl)) return report("仅支持 http://localhost 或 http://127.0.0.1", true);
@@ -53,6 +54,9 @@ function Options() {
     if (replyExamples.length > 3000) return report("我的回复示例不能超过 3000 字符", true);
     if (!postPrompt || postPrompt.length > 3000) return report("发帖提示词必须为 1–3000 字符", true);
     if (postExamples.length > 3000) return report("我的发帖示例不能超过 3000 字符", true);
+    if (postCategories.length > 15 || postCategories.some((name) => typeof name !== "string" || !name.trim() || name.length > 40)) {
+      return report("发帖类别选择无效", true);
+    }
     if (!/^\d+$/.test(String(form.oneClickCountdownSeconds).trim()) || oneClickCountdownSeconds < 3 || oneClickCountdownSeconds > 60) {
       return report("发送前倒计时必须是 3–60 的整数秒", true);
     }
@@ -60,8 +64,8 @@ function Options() {
     try {
       if (typeof form.autoLikeAfterReply !== "boolean" || typeof form.oneClickReply !== "boolean") return report("回复开关设置无效，请重新勾选后保存", true);
       await chrome.storage.local.set({ gatewayUrl, tone: form.tone, candidateCount, replyPrompt, replyExamples,
-        postPrompt, postExamples, autoLikeAfterReply: form.autoLikeAfterReply, oneClickReply: form.oneClickReply, oneClickCountdownSeconds });
-      setForm(previous => ({ ...previous, gatewayUrl, candidateCount, replyPrompt, replyExamples, postPrompt, postExamples, oneClickCountdownSeconds }));
+        postPrompt, postExamples, postCategories, autoLikeAfterReply: form.autoLikeAfterReply, oneClickReply: form.oneClickReply, oneClickCountdownSeconds });
+      setForm(previous => ({ ...previous, gatewayUrl, candidateCount, replyPrompt, replyExamples, postPrompt, postExamples, postCategories, oneClickCountdownSeconds }));
       report("已保存，下次生成生效。");
     } catch (saveError) {
       report(`保存设置失败：${saveError.message}`, true);
@@ -116,6 +120,13 @@ function Options() {
       field("我的发帖示例（可选）", h("textarea", { id: "postExamples", maxLength: 3000, value: form.postExamples, disabled: loading || saving,
         placeholder: "每行一条你自己发过的帖子，建议 3–10 条", onChange: event => update("postExamples", event.target.value) }),
         "只用于学习你的口吻，不会替代话题事实或强制帖文语言。示例会发送给生成模型；不要填写密钥或敏感资料。"),
+      field("获取类别（可多选；不选＝全部）", h("div", { id: "postCategories" },
+        POST_CATEGORY_OPTIONS.map((name) => h("label", { key: name, className: "cat" },
+          h("input", { type: "checkbox", checked: (form.postCategories || []).includes(name), disabled: loading || saving,
+            onChange: event => update("postCategories", event.target.checked
+              ? [...(form.postCategories || []), name]
+              : (form.postCategories || []).filter((entry) => entry !== name)) }), " " + name))),
+        "按 xzhishu 推文榜条目的类别筛选（11 类，2026-10-24 实测）。仅热门推文榜支持；热门话题榜没有类别字段，勾选后用话题榜会明确报错。"),
       h("button", { id: "resetPostPrompt", type: "button", disabled: loading || saving, onClick: () => { update("postPrompt", DEFAULT_POST_PROMPT); report("已恢复默认发帖提示词，请点击保存。"); } }, "恢复默认发帖提示词"),
       h("small", null, "发帖只回填草稿，由你人工点击发帖；候选缓存保存在扩展本地存储。")
     ),

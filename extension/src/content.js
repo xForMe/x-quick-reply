@@ -261,21 +261,33 @@
       `选择置信度：${(props.decision.confidence * 100).toFixed(1)}%（不代表回复正确率）`
     ));
     const postMode = props.panelKind === "post";
-    const cacheNodes = props.postCache.map(item => h(
-      "div", { key: item.id, className: `qr-cache-item${item.usedAt ? " used" : ""}`, "data-cache-item": item.id },
-      h("div", { className: "qr-cache-text" }, item.text),
-      item.checkNotes.length ? h("div", { className: "qr-cache-check" }, item.checkNotes.join("；")) : null,
-      h("div", { className: "qr-cache-meta" },
-        `${item.sourceTopic.title} · ${new Date(item.createdAt).toLocaleString()}${item.usedAt ? " · 已发过" : ""}${item.sessionOnly ? " · 未入缓存" : ""}`),
-      h("div", { className: "qr-cache-actions" },
-        item.usedAt
-          ? h("button", { type: "button", "data-action": "post-unmark", disabled: props.pendingFill,
-              onClick: () => props.onAction("post-unmark", item.id) }, "放回可选")
-          : h("button", { type: "button", className: "qr-fill", "data-action": "post-fill", disabled: props.pendingFill,
-              onClick: () => props.onAction("post-fill", item.id) }, "填入发帖框"),
-        h("button", { type: "button", "data-action": "post-delete", disabled: props.pendingFill,
-          onClick: () => props.onAction("post-delete", item.id) }, "删除")
-      )
+    // Cache entries are grouped by their source topic: each topic keeps its
+    // own post(s) underneath instead of one flat, cramped list.
+    const groups = [];
+    for (const item of props.postCache) {
+      let group = groups.find((entry) => entry.id === item.sourceTopic.id);
+      if (!group) { group = { id: item.sourceTopic.id, title: item.sourceTopic.title, items: [] }; groups.push(group); }
+      group.items.push(item);
+    }
+    const cacheNodes = groups.map(group => h(
+      "div", { key: group.id, className: "qr-topic-group", "data-topic-group": group.id },
+      h("div", { className: "qr-topic-head" }, group.title),
+      h("div", { className: "qr-topic-posts" }, group.items.map(item => h(
+        "div", { key: item.id, className: `qr-cache-item${item.usedAt ? " used" : ""}`, "data-cache-item": item.id },
+        h("div", { className: "qr-cache-text" }, item.text),
+        item.checkNotes.length ? h("div", { className: "qr-cache-check" }, item.checkNotes.join("；")) : null,
+        h("div", { className: "qr-cache-meta" },
+          `${new Date(item.createdAt).toLocaleString()}${item.text === props.postBatch?.recommendedText ? " · 决策推荐" : ""}${item.usedAt ? " · 已发过" : ""}${item.sessionOnly ? " · 未入缓存" : ""}`),
+        h("div", { className: "qr-cache-actions" },
+          item.usedAt
+            ? h("button", { type: "button", "data-action": "post-unmark", disabled: props.pendingFill,
+                onClick: () => props.onAction("post-unmark", item.id) }, "放回可选")
+            : h("button", { type: "button", className: "qr-fill", "data-action": "post-fill", disabled: props.pendingFill,
+                onClick: () => props.onAction("post-fill", item.id) }, "填入发帖框"),
+          h("button", { type: "button", "data-action": "post-delete", disabled: props.pendingFill,
+            onClick: () => props.onAction("post-delete", item.id) }, "删除")
+        )
+      )))
     ));
     return h("aside", { id: PANEL_ID, hidden: props.hidden, "aria-busy": String(props.generating || props.pendingFill) },
       h("div", { className: "qr-header" },
@@ -288,8 +300,8 @@
           onClick: () => props.onAction("post-batch") }, props.generating ? "生成中，请稍候…" : "生成新一批（热门话题榜 5 选 1）"),
         h("button", { type: "button", className: "qr-ghost", "data-action": "post-batch-tweets", disabled: props.generating || props.pendingFill,
           onClick: () => props.onAction("post-batch-tweets") }, "改用热门推文榜生成"),
-        props.postBatch?.selectedTopic ? h("div", { className: "qr-reason" },
-          `本批来源：${props.postBatch.board || "热门话题榜"} · 素材：${props.postBatch.selectedTopic.title}（决策选定）${props.postBatch.evicted ? ` · 已自动清理 ${props.postBatch.evicted} 条` : ""}`) : null,
+        props.postBatch ? h("div", { className: "qr-reason" },
+          `本批来源：${props.postBatch.board || "热门话题榜"} · ${props.postBatch.topicCount || 0} 个话题各一条帖文${props.postBatch.evicted ? ` · 已自动清理 ${props.postBatch.evicted} 条` : ""}`) : null,
         h("div", { className: "qr-cache-head" },
           h("span", null, `候选缓存池 · ${props.postCache.length} 条`),
           h("button", { type: "button", "data-action": "post-clear", disabled: props.pendingFill || !props.postCache.length,
@@ -385,23 +397,28 @@
     if (current !== generation) return;
     if (!sourceIsCurrent()) return setStatus("发帖框已变化，请重新生成", true);
     if (!response?.ok) return setStatus(response?.error || "生成失败", true);
-    if (response.rejected) {
-      postBatch = null;
-      renderPanel();
-      return setStatus("决策拒选：5 条话题均不合适（__none__），未生成帖文；可稍后重新生成", true);
-    }
-    postBatch = { selectedTopic: response.selectedTopic, evicted: response.evicted,
-      board: response.source === "xzhishu-tweets-hot" ? "热门推文榜" : "热门话题榜" };
+    // The decision model only annotates one recommended post. An abstention
+    // hides that mark; every generated post still goes to the cache pool.
+    const recommended = response.decision && response.decision.reviewRequired !== true
+      ? response.candidates.find((candidate) => candidate.id === response.decision.selectedId)
+      : null;
+    postBatch = { evicted: response.evicted, topicCount: response.topics.length,
+      board: response.source === "xzhishu-tweets-hot" ? "热门推文榜" : "热门话题榜",
+      recommendedText: recommended ? recommended.text : null };
     if (response.cacheError) {
       // The batch is usable this session but must never be presented as cached.
-      postCache = response.candidates.map((candidate) => ({ id: candidate.id, text: candidate.text,
-        checkNotes: candidate.checkNotes, sourceTopic: response.selectedTopic, batchId: "session",
-        createdAt: Date.now(), sessionOnly: true }));
+      postCache = response.candidates.map((candidate) => {
+        const topic = response.topics.find((entry) => entry.id === candidate.topicId);
+        return { id: candidate.id, text: candidate.text, checkNotes: candidate.checkNotes,
+          sourceTopic: { id: topic.id, title: topic.title }, batchId: "session",
+          createdAt: Date.now(), sessionOnly: true };
+      });
       renderPanel();
       return setStatus(`${response.cacheError}。本批候选仅本次可用（标注“未入缓存”），填入后不保留到下次`, true);
     }
     postCache = response.cache;
-    let text = `本批来源：${postBatch.board}。选定素材：${response.selectedTopic.title}（决策选定）。已生成 ${response.candidates.length} 条帖文并入缓存池（共 ${response.cache.length} 条），每次选 1 条填入。`;
+    let text = `本批来源：${postBatch.board}。${response.topics.length} 个话题各一条帖文，已入缓存池（共 ${response.cache.length} 条）；`
+      + (recommended ? "决策推荐 1 条。" : "决策未推荐（全部不合适），请自选。") + "每次选 1 条填入。";
     if (response.evicted) text += ` 缓存已满，已自动清理 ${response.evicted} 条（先已发过的，再最旧的）。`;
     setStatus(text);
     renderPanel();

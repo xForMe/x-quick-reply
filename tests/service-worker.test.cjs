@@ -234,11 +234,11 @@ const hotTopics = () => ([
   { id: 't4', rank: 4, title: '话题四', summary: '摘要四。', tags: [], repliesCount: 40 },
   { id: 't5', rank: 5, title: '话题五', summary: '摘要五。', tags: [], repliesCount: 50 }
 ]);
-const topicDecision = (selectedId = 't3') => ({ schemaVersion: POST_SCHEMA, model: 'decision-model-preview',
+const postDecision = (selectedId = 'c3') => ({ schemaVersion: POST_SCHEMA, model: 'decision-model-preview',
   selectedId, reviewRequired: selectedId === null,
-  confidence: 0.7, probabilities: { t1: 0.05, t2: 0.05, t3: 0.7, t4: 0.05, t5: 0.05, __none__: 0.1 } });
+  confidence: 0.7, probabilities: { c1: 0.1, c2: 0.1, c3: 0.5, c4: 0.1, c5: 0.1, __none__: 0.1 } });
 const postCandidates = (count = 5) => ({ schemaVersion: POST_SCHEMA,
-  candidates: Array.from({ length: count }, (_, i) => ({ id: `c${i + 1}`, text: `帖文${i + 1}：你会怎么选？四选一。`, checkNotes: ['发布前核实：机制属实'] })) });
+  candidates: Array.from({ length: count }, (_, i) => ({ id: `c${i + 1}`, topicId: `t${i + 1}`, text: `帖文${i + 1}：你会怎么选？四选一。`, checkNotes: ['发布前核实：机制属实'] })) });
 const topicsResponse = () => ({ body: { schemaVersion: POST_SCHEMA, source: 'xzhishu-topics-hot', fetchedAt: 1, topics: hotTopics() } });
 
 function postRuntime(responses, { tabUrl = 'https://x.com/compose/post', settings = {}, store = {}, getError, setError } = {}) {
@@ -275,30 +275,33 @@ function postRuntime(responses, { tabUrl = 'https://x.com/compose/post', setting
     cacheOp: (op, id) => receive({ type: 'POST_CACHE_OP', op, id }) };
 }
 
-test('post batch runs fetch, decision, generation and caches exactly five drafts', async () => {
-  const app = postRuntime([topicsResponse(), { body: topicDecision() }, { body: postCandidates() }]);
+test('post batch runs fetch, one post per topic, decision and caches every draft', async () => {
+  const app = postRuntime([topicsResponse(), { body: postCandidates() }, { body: postDecision() }]);
   const result = await app.batch();
   assert.equal(result.ok, true, result.error);
-  assert.equal(result.selectedTopic.id, 't3');
+  assert.equal(result.topics.length, 5);
   assert.equal(result.candidates.length, 5);
+  assert.equal(result.candidates[2].topicId, 't3');
+  assert.equal(result.decision.selectedId, 'c3');
   assert.equal(app.calls.length, 3);
   assert.match(app.calls[0].url, /\/posts\/topics\/fetch$/);
-  assert.match(app.calls[1].url, /\/posts\/topics\/decide$/);
-  assert.match(app.calls[2].url, /\/posts\/generate$/);
-  assert.equal(JSON.parse(app.calls[2].options.body).selectedTopic.id, 't3');
-  assert.equal(JSON.parse(app.calls[2].options.body).language, 'auto');
+  assert.match(app.calls[1].url, /\/posts\/generate$/);
+  assert.match(app.calls[2].url, /\/posts\/decide$/);
+  assert.equal(JSON.parse(app.calls[1].options.body).topics.length, 5);
+  assert.equal(JSON.parse(app.calls[1].options.body).language, 'auto');
   assert.equal(app.storage[CACHE_KEY].items.length, 5);
   assert.equal(result.cache.length, 5);
   assert.equal(result.cacheError, null);
 });
 
-test('topic abstention stops before generation and never touches the cache', async () => {
-  const app = postRuntime([topicsResponse(), { body: topicDecision(null) }]);
+test('decision abstention still caches every post but marks none recommended', async () => {
+  const app = postRuntime([topicsResponse(), { body: postCandidates() }, { body: postDecision(null) }]);
   const result = await app.batch();
   assert.equal(result.ok, true, result.error);
-  assert.equal(result.rejected, true);
-  assert.equal(app.calls.length, 2);
-  assert.equal(app.storage[CACHE_KEY], undefined);
+  assert.equal(result.decision.reviewRequired, true);
+  assert.equal(result.decision.selectedId, null);
+  assert.equal(app.storage[CACHE_KEY].items.length, 5);
+  assert.equal(result.cache.length, 5);
 });
 
 test('over the limit the cache deletes used items first, then the oldest', async () => {
@@ -306,7 +309,7 @@ test('over the limit the cache deletes used items first, then the oldest', async
   items.push({ id: 'used-1', text: '已发过的旧帖一', checkNotes: [], sourceTopic: { id: 't0', title: '旧话题' }, batchId: 'b0', createdAt: 1, usedAt: 10 });
   items.push({ id: 'used-2', text: '已发过的旧帖二', checkNotes: [], sourceTopic: { id: 't0', title: '旧话题' }, batchId: 'b0', createdAt: 2, usedAt: 20 });
   for (let i = 3; i <= 28; i++) items.push({ id: `old-${i}`, text: `旧帖${i}`, checkNotes: [], sourceTopic: { id: 't0', title: '旧话题' }, batchId: 'b0', createdAt: i });
-  const app = postRuntime([topicsResponse(), { body: topicDecision() }, { body: postCandidates() }],
+  const app = postRuntime([topicsResponse(), { body: postCandidates() }, { body: postDecision() }],
     { store: { [CACHE_KEY]: { items } } });
   const result = await app.batch();
   assert.equal(result.ok, true, result.error);
@@ -320,7 +323,7 @@ test('over the limit the cache deletes used items first, then the oldest', async
 });
 
 test('cache write failure keeps the batch visible but never claims it cached', async () => {
-  const app = postRuntime([topicsResponse(), { body: topicDecision() }, { body: postCandidates() }], { setError: 'disk full' });
+  const app = postRuntime([topicsResponse(), { body: postCandidates() }, { body: postDecision() }], { setError: 'disk full' });
   const result = await app.batch();
   assert.equal(result.ok, true, result.error);
   assert.match(result.cacheError, /cache\.write/);
@@ -363,11 +366,11 @@ test('invalid topic or post payloads stop the batch chain at their stage', async
   assert.equal(emptyResult.ok, false);
   assert.equal(empty.calls.length, 1);
 
-  const short = postRuntime([topicsResponse(), { body: topicDecision() }, { body: postCandidates(4) }]);
+  const short = postRuntime([topicsResponse(), { body: postCandidates(4) }]);
   const shortResult = await short.batch();
   assert.equal(shortResult.ok, false);
-  assert.match(shortResult.error, /恰好 5/);
-  assert.equal(short.calls.length, 3);
+  assert.match(shortResult.error, /恰好一条/);
+  assert.equal(short.calls.length, 2);
 });
 
 test('post messages require a compose surface on the current tab', async () => {
@@ -379,7 +382,7 @@ test('post messages require a compose surface on the current tab', async () => {
 });
 
 test('the board source is passed explicitly and never switched on failure', async () => {
-  const app = postRuntime([topicsResponse(), { body: topicDecision() }, { body: postCandidates() }]);
+  const app = postRuntime([topicsResponse(), { body: postCandidates() }, { body: postDecision() }]);
   const result = await app.batch('tweets');
   assert.equal(result.ok, true, result.error);
   assert.equal(JSON.parse(app.calls[0].options.body).source, 'tweets');

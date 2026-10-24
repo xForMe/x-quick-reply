@@ -73,47 +73,50 @@ async function generateReplies(context, source) {
     oneClickCountdownSeconds: settings.oneClickCountdownSeconds };
 }
 
-// One button runs the whole quick-post batch: topics fetch -> decision ->
-// post generation -> cache append. Any failing stage stops the chain and is
-// reported with its stage; there is no retry, fallback source or mock output.
+// One button runs the whole quick-post batch: topics fetch -> one post per
+// topic -> decision recommendation -> cache append. Any failing stage stops
+// the chain and is reported with its stage; no retry, fallback or mock output.
 async function generatePostBatch(source, board) {
   const settings = await loadSettings();
   if (typeof settings.postPrompt !== "string" || !settings.postPrompt.trim() || settings.postPrompt.length > 3000) throw new Error("请在扩展设置中填写发帖提示词（1–3000 字符）");
   // The board is chosen explicitly by the user (topics or tweets). A failing
   // board is reported as-is; the worker never switches sources by itself.
   if (board !== undefined && board !== "topics" && board !== "tweets") throw new Error("话题来源无效：只能是 topics 或 tweets");
+  const categories = validateCategories(settings.postCategories);
   const base = gatewayBase(settings);
-  const head = { schemaVersion: POST_SCHEMA, kind: "original-post", source: board || "topics" };
+  const head = { schemaVersion: POST_SCHEMA, kind: "original-post", source: board || "topics", categories };
+  const topicPayload = (topics) => topics.map((topic) => ({
+    id: topic.id, rank: topic.rank, title: topic.title, summary: topic.summary, tags: topic.tags, repliesCount: topic.repliesCount
+  }));
 
   const fetched = await postJson(`${base}/v1/posts/topics/fetch`, head, settings.timeoutMs);
   if (fetched?.schemaVersion !== POST_SCHEMA) throw new Error("话题接口协议版本无效，请重启新版网关并更新扩展");
   const topics = validateTopics(fetched?.topics);
   await assertTabUnchanged(source);
 
-  const decision = await postJson(`${base}/v1/posts/topics/decide`, { ...head, topics }, settings.timeoutMs);
-  const validDecision = validatePostDecision(decision, topics);
-  if (validDecision.reviewRequired) {
-    return { ok: true, rejected: true, topics, decision: validDecision, source: fetched.source, fetchedAt: fetched.fetchedAt };
-  }
-  const selectedTopic = topics.find((topic) => topic.id === validDecision.selectedId);
-  await assertTabUnchanged(source);
-
+  // One post per topic: generation covers every fetched topic, then the
+  // decision model recommends one post (or abstains). Abstention only hides
+  // the recommendation; every post still goes to the cache pool.
   const generated = await postJson(`${base}/v1/posts/generate`, {
     ...head,
-    selectedTopic: { id: selectedTopic.id, title: selectedTopic.title, summary: selectedTopic.summary },
+    topics: topicPayload(topics),
     language: "auto",
     tone: settings.tone,
     postPrompt: settings.postPrompt.trim(),
     postExamples: typeof settings.postExamples === "string" ? settings.postExamples.trim() : ""
   }, settings.timeoutMs);
   if (generated?.schemaVersion !== POST_SCHEMA) throw new Error("帖文接口协议版本无效，请重启新版网关并更新扩展");
-  const candidates = validatePostCandidates(generated?.candidates);
+  const candidates = validatePostCandidates(generated?.candidates, topics);
+  await assertTabUnchanged(source);
+
+  const decision = await postJson(`${base}/v1/posts/decide`, { ...head, topics: topicPayload(topics), candidates }, settings.timeoutMs);
+  const validDecision = validatePostDecision(decision, candidates);
 
   let cache = null;
   let cacheError = null;
   let evicted = 0;
   try {
-    const appended = await appendCache(candidates, selectedTopic);
+    const appended = await appendCache(candidates, topics);
     cache = appended.items;
     evicted = appended.evicted;
   } catch (error) {
@@ -121,7 +124,7 @@ async function generatePostBatch(source, board) {
     // presented as cached. Report the storage stage and keep the failure visible.
     cacheError = typeof error?.message === "string" ? error.message : "缓存写入失败（阶段 cache.write）";
   }
-  return { ok: true, rejected: false, topics, decision: validDecision, selectedTopic, candidates,
+  return { ok: true, topics, candidates, decision: validDecision,
     generation: generated.meta, cache, cacheError, evicted, source: fetched.source, fetchedAt: fetched.fetchedAt };
 }
 
@@ -177,18 +180,21 @@ async function writeCache(items) {
   }
 }
 
-async function appendCache(candidates, selectedTopic) {
+async function appendCache(candidates, topics) {
   const { items } = await readCache();
   const now = Date.now();
   const batchId = crypto.randomUUID();
-  const added = candidates.map((candidate) => ({
-    id: crypto.randomUUID(),
-    text: candidate.text,
-    checkNotes: candidate.checkNotes,
-    sourceTopic: { id: selectedTopic.id, title: selectedTopic.title },
-    batchId,
-    createdAt: now
-  }));
+  const added = candidates.map((candidate) => {
+    const topic = topics.find((entry) => entry.id === candidate.topicId);
+    return {
+      id: crypto.randomUUID(),
+      text: candidate.text,
+      checkNotes: candidate.checkNotes,
+      sourceTopic: { id: topic.id, title: topic.title },
+      batchId,
+      createdAt: now
+    };
+  });
   let merged = [...items, ...added];
   let evicted = 0;
   // 2026-10-24 review: when over the limit, delete items already used first,
@@ -269,28 +275,39 @@ function validateTopics(value) {
   });
 }
 
-function validatePostDecision(value, topics) {
+function validatePostDecision(value, candidates) {
   if (!value || value.schemaVersion !== POST_SCHEMA || value.model !== "decision-model-preview") throw new Error("decision 协议版本或模型无效");
   const rejected = value.reviewRequired === true && value.selectedId === null;
-  if (!rejected && (value.reviewRequired !== false || !topics.some((topic) => topic.id === value.selectedId))) throw new Error("decision 返回的话题 ID 无效");
+  if (!rejected && (value.reviewRequired !== false || !candidates.some((candidate) => candidate.id === value.selectedId))) throw new Error("decision 返回的候选 ID 无效");
   const confidence = value.confidence;
   if (typeof confidence !== "number" || !Number.isFinite(confidence) || confidence < 0 || confidence > 1) throw new Error("decision 返回的置信度无效");
-  const allowed = new Set([...topics.map((topic) => topic.id), "__none__"]);
+  const allowed = new Set([...candidates.map((candidate) => candidate.id), "__none__"]);
   const probabilities = value.probabilities;
   if (!probabilities || typeof probabilities !== "object" || Array.isArray(probabilities) || Object.keys(probabilities).length !== allowed.size || Object.entries(probabilities).some(([id, probability]) => !allowed.has(id) || typeof probability !== "number" || !Number.isFinite(probability) || probability < 0 || probability > 1) || Math.abs(Object.values(probabilities).reduce((sum, p) => sum + p, 0) - 1) > 0.02) throw new Error("decision 返回的概率分布无效");
   return { selectedId: value.selectedId, reviewRequired: rejected, confidence, probabilities, model: value.model, elapsedMs: value.elapsedMs };
 }
 
-function validatePostCandidates(value) {
-  if (!Array.isArray(value) || value.length !== 5) throw new Error("帖文接口必须返回恰好 5 条候选");
+function validateCategories(value) {
+  if (value === undefined || (Array.isArray(value) && value.length === 0)) return [];
+  if (!Array.isArray(value) || value.length > 15
+    || value.some((name) => typeof name !== "string" || !name.trim() || name.length > 40)) throw new Error("发帖类别设置无效，请重新保存扩展设置");
+  return [...new Set(value.map((name) => name.trim()))];
+}
+
+function validatePostCandidates(value, topics) {
+  if (!Array.isArray(value) || value.length !== topics.length) throw new Error("帖文接口必须为每个话题返回恰好一条候选");
+  const topicIds = new Set(topics.map((topic) => topic.id));
   const seen = new Set();
+  const covered = new Set();
   return value.map((item) => {
     if (!item || typeof item.id !== "string" || !/^c[1-5]$/.test(item.id) || seen.has(item.id)
+      || typeof item.topicId !== "string" || !topicIds.has(item.topicId) || covered.has(item.topicId)
       || typeof item.text !== "string" || !item.text.trim() || item.text.length > 280
       || !Array.isArray(item.checkNotes) || item.checkNotes.length > 5
-      || item.checkNotes.some((note) => typeof note !== "string" || !note.trim() || note.length > 120)) throw new Error("帖文接口返回了非法候选");
+      || item.checkNotes.some((note) => typeof note !== "string" || !note.trim() || note.length > 120)) throw new Error("帖文接口返回了非法候选（每个话题必须恰好一条）");
     seen.add(item.id);
-    return { id: item.id, text: item.text.trim(), checkNotes: item.checkNotes.map((note) => note.trim()) };
+    covered.add(item.topicId);
+    return { id: item.id, topicId: item.topicId, text: item.text.trim(), checkNotes: item.checkNotes.map((note) => note.trim()) };
   });
 }
 

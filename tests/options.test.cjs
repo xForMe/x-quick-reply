@@ -93,3 +93,15 @@ test('post prompt fields are editable and validated like the reply prompt',async
     assert.match(a.field('status').textContent,/发帖提示词/);
   }finally{a.close();}
 });
+test('post categories are selectable and saved with the post settings',async()=>{
+  const a=await app();
+  try{
+    const box=a.field('postCategories');
+    assert.ok(box,'类别多选容器必须存在');
+    assert.equal(box.querySelectorAll('input[type=checkbox]').length,11);
+    box.querySelectorAll('input[type=checkbox]')[0].click();
+    await a.save();
+    assert.deepEqual(a.writes[0].postCategories,['AI']);
+    assert.match(a.field('status').textContent,/下次生成生效/);
+  }finally{a.close();}
+});

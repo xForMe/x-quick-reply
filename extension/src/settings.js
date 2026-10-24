@@ -14,6 +14,12 @@ export const DEFAULT_POST_PROMPT = `面向 X 发帖，目标是吸引目标读�
 像真人随手发的一条：不用营销腔、标签堆砌或 AI 式收尾，没有自然笑点就不写笑点。
 以上中文只描述风格；实际帖文跟随话题标题的主要语言。`;
 
+// xzhishu 类别名（2026-10-24 实测 /api/v1/categories）；筛选按推文榜条目的 category 名匹配。
+export const POST_CATEGORY_OPTIONS = Object.freeze([
+  "AI", "Web3/加密", "科技数码", "财经投资", "社会观察", "知识分享",
+  "个人成长与生活", "创业&出海", "副业", "独立开发", "其他"
+]);
+
 export const DEFAULTS = Object.freeze({
   gatewayUrl: "http://127.0.0.1:8787",
   tone: "natural",
@@ -22,6 +28,7 @@ export const DEFAULTS = Object.freeze({
   replyExamples: "",
   postPrompt: DEFAULT_POST_PROMPT,
   postExamples: "",
+  postCategories: Object.freeze([]),
   autoLikeAfterReply: false,
   oneClickReply: false,
   oneClickCountdownSeconds: 10,

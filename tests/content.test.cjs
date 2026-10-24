@@ -1012,10 +1012,11 @@ function postApp({ items = [cacheItem('k1', '帖文一：你会怎么选？四�
     url: 'https://x.com/compose/post',
     response: (message) => {
       if (message.type === 'LIST_POST_CACHE') return { ok: true, items };
-      if (message.type === 'GENERATE_POST_BATCH') return batchResponse || { ok: true, rejected: false,
-        topics: [], decision: { selectedId: 't3', reviewRequired: false, confidence: 0.7 },
-        selectedTopic: { id: 't3', title: '话题三' }, cache: items, cacheError: null, evicted: 0,
-        candidates: items.map((item, i) => ({ id: `c${i + 1}`, text: item.text, checkNotes: item.checkNotes })) };
+      if (message.type === 'GENERATE_POST_BATCH') return batchResponse || { ok: true,
+        topics: [{ id: 't3', rank: 1, title: '话题三', summary: '摘要三。', tags: [], repliesCount: 30 }],
+        decision: { selectedId: 'c1', reviewRequired: false, confidence: 0.7 },
+        cache: items, cacheError: null, evicted: 0, source: 'xzhishu-tweets-hot',
+        candidates: items.map((item, i) => ({ id: `c${i + 1}`, topicId: 't3', text: item.text, checkNotes: item.checkNotes })) };
       if (message.type === 'POST_CACHE_OP') {
         return { ok: true, items: items.map((item) => item.id === message.id && message.op === 'mark'
           ? { ...item, usedAt: 3000 } : item) };
@@ -1032,6 +1033,9 @@ test('post mode fills one cached candidate into the compose box without sending'
     await new Promise(resolve => setTimeout(resolve, 20));
     assert.ok(a.panel().querySelector('[data-action="post-batch"]'), '发帖场景只显示发帖面板');
     assert.equal(a.panel().querySelector('[data-action="generate"]'), null, '发帖面板不混入回复组件');
+    // Posts are grouped under their source topic instead of one flat list.
+    assert.ok(a.panel().querySelector('[data-topic-group="t3"]'), '需要按话题分组');
+    assert.match(a.panel().querySelector('.qr-topic-head').textContent, /话题三/);
     const fillButtons = a.panel().querySelectorAll('[data-action="post-fill"]');
     assert.equal(fillButtons.length, 2);
     let sent = 0;
