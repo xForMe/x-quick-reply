@@ -61,3 +61,17 @@ test('storage read or write errors remain visible without reporting success',asy
   const b=await app({}, {setError:'storage write failed'});
   try{await b.save();assert.match(b.field('status').textContent,/保存设置失败/);assert.equal(b.field('save').disabled,false);assert.equal(b.writes.length,0);}finally{b.close();}
 });
+test('post prompt fields are editable and validated like the reply prompt',async()=>{
+  const a=await app();
+  try{
+    assert.match(a.field('postPrompt').value,/吸引目标读者留言互动/);
+    a.set('postPrompt',' 就事论事，结尾用四选一。  ');
+    a.set('postExamples','  这条我会发：今天遇到一件事。  ');
+    await a.save();
+    assert.equal(a.writes[0].postPrompt,'就事论事，结尾用四选一。');
+    assert.equal(a.writes[0].postExamples,'这条我会发：今天遇到一件事。');
+    a.set('postPrompt','');
+    await a.save();
+    assert.match(a.field('status').textContent,/发帖提示词/);
+  }finally{a.close();}
+});

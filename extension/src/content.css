@@ -14,3 +14,18 @@
 .qr-candidate em { color: #0f7a4b; font-size: 12px; font-style: normal; }
 .qr-reason { color: #536471; font-size: 12px; }
 .qr-diagnostics { margin-top: 10px; padding: 5px; border: 0; color: #536471; background: transparent; text-decoration: underline; }
+
+/* quick-post 发帖模式 */
+.qr-modes { display: flex; gap: 6px; margin: 6px 0 8px; }
+.qr-modes button { flex: 1; padding: 5px 8px; border: 1px solid #cfd9de; border-radius: 8px; background: #fff; color: #536471; font-size: 12px; }
+.qr-modes button.selected { border-color: #1d9bf0; background: #e8f5fe; color: #0f1419; font-weight: 700; }
+.qr-cache-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 10px; color: #536471; font-size: 12px; }
+.qr-cache-head button { padding: 3px 8px; border: 1px solid #cfd9de; border-radius: 8px; background: #fff; color: #b42318; font-size: 11px; }
+.qr-cache-item { display: grid; gap: 5px; padding: 10px; border: 1px solid #cfd9de; border-radius: 10px; background: #fff; }
+.qr-cache-item.used { opacity: .55; }
+.qr-cache-text { white-space: pre-wrap; font-size: 13px; }
+.qr-cache-check { padding: 5px 7px; border-radius: 7px; background: #fff8e8; color: #8a5a00; font-size: 11px; }
+.qr-cache-meta { color: #536471; font-size: 11px; }
+.qr-cache-actions { display: flex; gap: 6px; }
+.qr-cache-actions button { flex: 1; padding: 5px 6px; border: 1px solid #cfd9de; border-radius: 8px; background: #fff; color: #0f1419; font-size: 11px; }
+.qr-cache-actions .qr-fill { margin-top: 0; color: #fff; background: #0f7a4b; border: 0; }

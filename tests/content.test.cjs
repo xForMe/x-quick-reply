@@ -719,3 +719,78 @@ test('toolbar reopens a closed panel and SPA navigation discovers reply dialog',
     await a.generate(); assert.equal(a.calls.length,1);
   }finally{a.close();}
 });
+
+// ---- quick-post 发帖模式（合成 DOM；不代表真实 X 发帖框已验证）----
+const composeEditor = '<div data-testid="tweetTextarea_0" role="textbox" contenteditable="true"></div>';
+const cacheItem = (id, text, used) => ({ id, text, checkNotes: ['发布前核实：机制属实'],
+  sourceTopic: { id: 't3', title: '话题三' }, batchId: 'b1', createdAt: 1000, ...(used ? { usedAt: 2000 } : {}) });
+
+function postApp({ items = [cacheItem('k1', '帖文一：你会怎么选？四选一。'), cacheItem('k2', '帖文二：说说你的边界。')], batchResponse } = {}) {
+  return app({
+    html: `<div role="dialog">${composeEditor}<button data-testid="tweetButton">Post</button></div>`,
+    url: 'https://x.com/compose/post',
+    response: (message) => {
+      if (message.type === 'LIST_POST_CACHE') return { ok: true, items };
+      if (message.type === 'GENERATE_POST_BATCH') return batchResponse || { ok: true, rejected: false,
+        topics: [], decision: { selectedId: 't3', reviewRequired: false, confidence: 0.7 },
+        selectedTopic: { id: 't3', title: '话题三' }, cache: items, cacheError: null, evicted: 0,
+        candidates: items.map((item, i) => ({ id: `c${i + 1}`, text: item.text, checkNotes: item.checkNotes })) };
+      if (message.type === 'POST_CACHE_OP') {
+        return { ok: true, items: items.map((item) => item.id === message.id && message.op === 'mark'
+          ? { ...item, usedAt: 3000 } : item) };
+      }
+      return { ok: true };
+    }
+  });
+}
+
+test('post mode fills one cached candidate into the compose box without sending', async () => {
+  const a = postApp();
+  try {
+    a.open();
+    await new Promise(resolve => setTimeout(resolve, 20));
+    assert.match(a.panel().querySelector('[data-action="mode-post"]').className, /selected/);
+    const fillButtons = a.panel().querySelectorAll('[data-action="post-fill"]');
+    assert.equal(fillButtons.length, 2);
+    let sent = 0;
+    a.w.document.querySelector('[data-testid="tweetButton"]').onclick = () => sent++;
+    fillButtons[0].click();
+    await new Promise(resolve => setTimeout(resolve, 600));
+    assert.equal(a.w.document.querySelector('[role="textbox"]').textContent, '帖文一：你会怎么选？四选一。');
+    assert.equal(sent, 0);
+    assert.match(a.status(), /已填入发帖框草稿/);
+    assert.ok(a.calls.some((message) => message.type === 'POST_CACHE_OP' && message.op === 'mark' && message.id === 'k1'));
+  } finally { a.close(); }
+});
+
+test('switching to another cached candidate swaps the draft and returns the previous one', async () => {
+  const a = postApp();
+  try {
+    a.open();
+    await new Promise(resolve => setTimeout(resolve, 20));
+    a.panel().querySelectorAll('[data-action="post-fill"]')[0].click();
+    await new Promise(resolve => setTimeout(resolve, 600));
+    // k1 is now marked as used, so the remaining fill button belongs to k2.
+    const remaining = a.panel().querySelectorAll('[data-action="post-fill"]');
+    assert.equal(remaining.length, 1);
+    remaining[0].click();
+    await new Promise(resolve => setTimeout(resolve, 600));
+    assert.equal(a.w.document.querySelector('[role="textbox"]').textContent, '帖文二：说说你的边界。');
+    const ops = a.calls.filter((message) => message.type === 'POST_CACHE_OP').map((message) => message.op);
+    assert.deepEqual(ops, ['mark', 'unmark', 'mark']);
+    assert.equal(a.calls.filter((message) => message.type === 'POST_CACHE_OP' && message.op === 'unmark')[0].id, 'k1');
+  } finally { a.close(); }
+});
+
+test('post batch loads the cache pool and never presents used items as fillable', async () => {
+  const a = postApp({ items: [cacheItem('k1', '帖文一：你会怎么选？四选一。', true)] });
+  try {
+    a.open();
+    await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(a.panel().querySelectorAll('[data-action="post-fill"]').length, 0);
+    assert.match(a.panel().querySelector('[data-role="cache"]').textContent, /已发过/);
+    a.w.document.querySelector('[data-action="post-batch"]').click();
+    await new Promise(resolve => setTimeout(resolve, 20));
+    assert.ok(a.calls.some((message) => message.type === 'GENERATE_POST_BATCH'));
+  } finally { a.close(); }
+});

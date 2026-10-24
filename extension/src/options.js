@@ -1,4 +1,4 @@
-import { DEFAULTS, DEFAULT_REPLY_PROMPT } from "./settings.js";
+import { DEFAULTS, DEFAULT_REPLY_PROMPT, DEFAULT_POST_PROMPT } from "./settings.js";
 
 document.addEventListener("DOMContentLoaded", () => {
   if (!globalThis.React || !globalThis.ReactDOM) throw new Error("React runtime 未加载，无法初始化扩展设置");
@@ -40,16 +40,21 @@ function Options() {
     const gatewayUrl = form.gatewayUrl.trim();
     const replyPrompt = form.replyPrompt.trim();
     const replyExamples = form.replyExamples.trim();
+    const postPrompt = form.postPrompt.trim();
+    const postExamples = form.postExamples.trim();
     const candidateCount = Number(form.candidateCount);
     if (!/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?\/?$/.test(gatewayUrl)) return report("仅支持 http://localhost 或 http://127.0.0.1", true);
     if (!Number.isInteger(candidateCount) || candidateCount < 2 || candidateCount > 5) return report("候选数量必须是 2–5 的整数", true);
     if (!["natural", "concise", "polite", "professional"].includes(form.tone)) return report("默认语气无效", true);
     if (!replyPrompt || replyPrompt.length > 3000) return report("整体回复提示词必须为 1–3000 字符", true);
     if (replyExamples.length > 3000) return report("我的回复示例不能超过 3000 字符", true);
+    if (!postPrompt || postPrompt.length > 3000) return report("发帖提示词必须为 1–3000 字符", true);
+    if (postExamples.length > 3000) return report("我的发帖示例不能超过 3000 字符", true);
     setSaving(true);
     try {
-      await chrome.storage.local.set({ gatewayUrl, tone: form.tone, candidateCount, replyPrompt, replyExamples, autoLikeAfterReply: form.autoLikeAfterReply });
-      setForm(previous => ({ ...previous, gatewayUrl, candidateCount, replyPrompt, replyExamples }));
+      await chrome.storage.local.set({ gatewayUrl, tone: form.tone, candidateCount, replyPrompt, replyExamples,
+        postPrompt, postExamples, autoLikeAfterReply: form.autoLikeAfterReply });
+      setForm(previous => ({ ...previous, gatewayUrl, candidateCount, replyPrompt, replyExamples, postPrompt, postExamples }));
       report("已保存，下次生成生效。");
     } catch (saveError) {
       report(`保存设置失败：${saveError.message}`, true);
@@ -79,6 +84,13 @@ function Options() {
     field("我的回复示例（可选）", h("textarea", { id: "replyExamples", maxLength: 3000, value: form.replyExamples, disabled: loading || saving,
       "aria-describedby": "examplesHelp", placeholder: "每行一条你自己写过的自然回复，建议 3–10 条", onChange: event => update("replyExamples", event.target.value) }),
       "只用于学习你的口吻，不会替代当前帖子事实或强制回复语言。示例会发送给生成模型和百炼；不要填写密钥、Cookie、私信正文或敏感资料。"),
+    field("发帖提示词", h("textarea", { id: "postPrompt", maxLength: 3000, value: form.postPrompt, disabled: loading || saving,
+      "aria-describedby": "postPromptHelp", onChange: event => update("postPrompt", event.target.value) }),
+      "发帖模式的帖文生成共用。可写互动钩子偏好、语气和不想出现的表达，最多 3000 字符。话题来自 xzhishu 热榜（第三方数据源，接口失效时明确报错）。不要填写密钥或隐私资料。"),
+    field("我的发帖示例（可选）", h("textarea", { id: "postExamples", maxLength: 3000, value: form.postExamples, disabled: loading || saving,
+      placeholder: "每行一条你自己发过的帖子，建议 3–10 条", onChange: event => update("postExamples", event.target.value) }),
+      "只用于学习你的口吻，不会替代话题事实或强制帖文语言。示例会发送给生成模型；不要填写密钥或敏感资料。"),
+    h("button", { id: "resetPostPrompt", type: "button", disabled: loading || saving, onClick: () => { update("postPrompt", DEFAULT_POST_PROMPT); report("已恢复默认发帖提示词，请点击保存。"); } }, "恢复默认发帖提示词"),
     h("label", null, h("input", { id: "autoLikeAfterReply", type: "checkbox", checked: form.autoLikeAfterReply === true, disabled: loading || saving,
       onChange: event => update("autoLikeAfterReply", event.target.checked) }), " 发送公开回复后打开原帖并自动点赞"),
     h("small", null, "仅在你实际点击 X 的发送按钮、且发送结果得到页面确认后执行；私信不适用。默认关闭，点赞失败不会重试。"),
