@@ -66,7 +66,7 @@ function app({html = `<div role="dialog">${post('123', '一起讨论这个想法
   return {w, calls, panel:()=>w.document.getElementById('quick-reply-panel'),
     status:()=>w.document.querySelector('[data-role="status"]').textContent,
     async generate(){await new Promise(resolve=>setTimeout(resolve,0));w.document.querySelector('[data-action="generate"]').click(); await new Promise(resolve=>setTimeout(resolve,180));},
-    open(){let result; messageListener({type:'OPEN_QUICK_REPLY'}, {id:'test'}, r=>result=r);return result;},
+    open(type='OPEN_QUICK_REPLY'){let result; messageListener({type}, {id:'test'}, r=>result=r);return result;},
     boot, tick(ms=0){now += ms; intervals.filter(Boolean).forEach(fn=>fn());},reinject(){return w.eval(source);},listenerCount(){return listenerCount;},
     close(){Object.defineProperty(w.Element.prototype,'innerHTML',htmlDescriptor);w.close();}};
 }
@@ -940,9 +940,17 @@ test('repeated explicit initialization keeps one panel and one live listener', (
 });
 
 test('blank post and quote composers never borrow a post from the background', async () => {
-  for(const html of [`${post('999','background')}<div role="dialog">${editor}</div>`, `<div role="dialog">${editor}${post('123','quote')}</div>`]) {
-    const a=app({html}); try { await a.generate(); assert.equal(a.calls.length,0); assert.match(a.status(),/回复|目标/); } finally{a.close();}
-  }
+  // A compose dialog without a target post is the post scene: the reply panel
+  // is not shown there, so nothing can borrow the background post.
+  const compose = app({ html: `${post('999', 'background')}<div role="dialog">${editor}</div>` });
+  try {
+    assert.ok(compose.panel().querySelector('[data-action="post-batch"]'), compose.status());
+    assert.equal(compose.panel().querySelector('[data-action="generate"]'), null);
+    assert.equal(compose.calls.length, 0);
+  } finally { compose.close(); }
+  // A quote composer (editor before the quoted post) is still rejected by the reply flow.
+  const quote = app({ html: `<div role="dialog">${editor}${post('123', 'quote')}</div>` });
+  try { await quote.generate(); assert.equal(quote.calls.length, 0); assert.match(quote.status(), /回复|目标/); } finally { quote.close(); }
 });
 
 test('nonempty draft stops before network, preserving user text', async () => {
@@ -1020,9 +1028,10 @@ function postApp({ items = [cacheItem('k1', '帖文一：你会怎么选？四�
 test('post mode fills one cached candidate into the compose box without sending', async () => {
   const a = postApp();
   try {
-    a.open();
+    assert.equal(a.open('OPEN_QUICK_POST').ok, true, a.status());
     await new Promise(resolve => setTimeout(resolve, 20));
-    assert.match(a.panel().querySelector('[data-action="mode-post"]').className, /selected/);
+    assert.ok(a.panel().querySelector('[data-action="post-batch"]'), '发帖场景只显示发帖面板');
+    assert.equal(a.panel().querySelector('[data-action="generate"]'), null, '发帖面板不混入回复组件');
     const fillButtons = a.panel().querySelectorAll('[data-action="post-fill"]');
     assert.equal(fillButtons.length, 2);
     let sent = 0;
@@ -1039,7 +1048,7 @@ test('post mode fills one cached candidate into the compose box without sending'
 test('switching to another cached candidate swaps the draft and returns the previous one', async () => {
   const a = postApp();
   try {
-    a.open();
+    a.open('OPEN_QUICK_POST');
     await new Promise(resolve => setTimeout(resolve, 20));
     a.panel().querySelectorAll('[data-action="post-fill"]')[0].click();
     await new Promise(resolve => setTimeout(resolve, 600));
@@ -1058,12 +1067,27 @@ test('switching to another cached candidate swaps the draft and returns the prev
 test('post batch loads the cache pool and never presents used items as fillable', async () => {
   const a = postApp({ items: [cacheItem('k1', '帖文一：你会怎么选？四选一。', true)] });
   try {
-    a.open();
+    a.open('OPEN_QUICK_POST');
     await new Promise(resolve => setTimeout(resolve, 20));
     assert.equal(a.panel().querySelectorAll('[data-action="post-fill"]').length, 0);
     assert.match(a.panel().querySelector('[data-role="cache"]').textContent, /已发过/);
     a.w.document.querySelector('[data-action="post-batch"]').click();
     await new Promise(resolve => setTimeout(resolve, 20));
     assert.ok(a.calls.some((message) => message.type === 'GENERATE_POST_BATCH'));
+  } finally { a.close(); }
+});
+
+test('reply and post entries refuse the wrong scene instead of opening a mixed panel', async () => {
+  const compose = postApp();
+  try {
+    const wrong = compose.open('OPEN_QUICK_REPLY');
+    assert.equal(wrong.ok, false);
+    assert.match(wrong.error, /发帖助手|发帖场景/);
+  } finally { compose.close(); }
+  const a = app();
+  try {
+    const wrong = a.open('OPEN_QUICK_POST');
+    assert.equal(wrong.ok, false);
+    assert.match(wrong.error, /发帖弹窗|compose/);
   } finally { a.close(); }
 });

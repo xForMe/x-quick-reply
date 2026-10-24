@@ -9,7 +9,7 @@ const reactRuntime=[
   fs.readFileSync(path.join(__dirname,'../extension/src/vendor/react-dom.production.min.js'),'utf8')
 ].join('\n');
 const source=fs.readFileSync(path.join(__dirname,'../extension/src/popup.js'),'utf8');
-async function clickOpen({scriptError, messageError, response={ok:true}, bootstrapResult={ok:true,version:'0.5.0'}}={}) {
+async function clickOpen({scriptError, messageError, response={ok:true}, bootstrapResult={ok:true,version:'0.6.0'}, button='open'}={}) {
   const dom=new JSDOM('<div id="app"></div>',{runScripts:'outside-only'});
   const w=dom.window, calls=[];
   let injected=false, closed=false;
@@ -17,7 +17,7 @@ async function clickOpen({scriptError, messageError, response={ok:true}, bootstr
   w.close=()=>{closed=true;};
   w.chrome={runtime:{openOptionsPage(){}}, tabs:{async query(){return [{id:123,url:'https://x.com/compose/post'}];},async sendMessage(id,message){calls.push(['message',id,message]);if(messageError)throw new Error(messageError);if(!injected)throw new Error('Could not establish connection. Receiving end does not exist.');return response;}},
     scripting:{async executeScript(options){calls.push(['script',options]);if(scriptError)throw new Error(scriptError);injected=true;return [{frameId:0,result:bootstrapResult}];},async insertCSS(options){calls.push(['css',options]);}}};
-  w.eval(reactRuntime);w.eval(source);w.document.getElementById('open').click();
+  w.eval(reactRuntime);w.eval(source);w.document.getElementById(button).click();
   await new Promise(resolve=>setTimeout(resolve,10));
   const result={calls,closed,status:w.document.getElementById('status').textContent};
   dispose();
@@ -71,4 +71,12 @@ test('actual popup and actual content script connect on an already open reply pa
     Object.defineProperty(page.window.Element.prototype,'innerHTML',htmlDescriptor);page.window.close();
     disposePopup();
   }
+});
+
+test('popup exposes separate reply and post entries with distinct messages',async()=>{
+  const reply=await clickOpen({button:'open'});
+  assert.equal(reply.calls.at(-1)[2].type,'OPEN_QUICK_REPLY');
+  const post=await clickOpen({button:'openPost'});
+  assert.equal(post.closed,true,post.status);
+  assert.equal(post.calls.at(-1)[2].type,'OPEN_QUICK_POST');
 });

@@ -1,5 +1,5 @@
 (() => {
-  const VERSION = "0.5.0";
+  const VERSION = "0.6.0";
   const INVALID_CONTEXT_TEXT = "插件连接已失效。请刷新 X 页面，再重新打开回复弹窗并生成。";
   function isInvalidContext(error) { return /^Extension context invalidated\.?$/i.test(error?.message || ""); }
   const READY_TEXT = "点击下方按钮，生成回复并填入输入框。";
@@ -38,7 +38,7 @@
   let postCache = [];
   let postBatch = null;
   let postFilledId = null;
-  let ui = { status: READY_TEXT, statusError: false, generating: false, routeHidden: false, mode: "reply", countdown: null };
+  let ui = { status: READY_TEXT, statusError: false, generating: false, routeHidden: false, countdown: null };
   const autoLike = createAutoLikeController({
     getSource: () => source,
     readContext,
@@ -72,17 +72,20 @@
   };
   document.addEventListener("click", onDocumentClick, true);
   const onMessage = (message, _sender, sendResponse) => {
-    if (message?.type !== "OPEN_QUICK_REPLY") return;
+    const type = message?.type;
+    if (type !== "OPEN_QUICK_REPLY" && type !== "OPEN_QUICK_POST") return;
     dismissed = false;
     ui.routeHidden = false;
-    if (isComposeScene()) ui.mode = "post";
-    if (ui.mode === "post") loadPostCache();
     renderPanel();
     try {
-      if (ui.mode === "post") {
+      if (type === "OPEN_QUICK_POST") {
+        // 发帖是独立入口：只在发帖场景打开发帖面板，不与回复混用。
+        if (!isComposeScene()) throw new Error("请先打开发帖弹窗或 /compose/post，再点击“发帖助手”");
         readComposeContext();
-        setStatus(`已识别发帖框。点击"生成新一批"，从 xzhishu 热榜取话题并生成帖文。`);
+        loadPostCache();
+        setStatus(`已识别发帖框。点击“生成新一批”，从 xzhishu 热榜取话题并生成帖文。`);
       } else {
+        if (isComposeScene()) throw new Error("当前是发帖场景，回复面板不可用；请点击工具栏的“发帖助手”");
         readContext();
         setStatus(`已识别当前回复目标。${READY_TEXT}`);
       }
@@ -165,7 +168,7 @@
       statusError: ui.statusError,
       generating: ui.generating,
       hidden: dismissed || ui.routeHidden,
-      mode: ui.mode,
+      panelKind: isComposeScene() ? "post" : "reply",
       candidates: state.candidates,
       selectedId: state.selectedId,
       decision: state.decision,
@@ -200,14 +203,6 @@
         break;
       case "diagnostics":
         copyDiagnostics();
-        break;
-      case "mode-reply":
-        ui.mode = "reply";
-        setStatus(isConversation() || isReplyRoute() ? `已切换到回复模式。${READY_TEXT}` : "已切换到回复模式；当前页面没有可识别的回复目标");
-        break;
-      case "mode-post":
-        ui.mode = "post";
-        loadPostCache();
         break;
       case "post-batch":
         generateBatch();
@@ -262,7 +257,7 @@
       { key: "reason", className: "qr-reason" },
       `选择置信度：${(props.decision.confidence * 100).toFixed(1)}%（不代表回复正确率）`
     ));
-    const postMode = props.mode === "post";
+    const postMode = props.panelKind === "post";
     const cacheNodes = props.postCache.map(item => h(
       "div", { key: item.id, className: `qr-cache-item${item.usedAt ? " used" : ""}`, "data-cache-item": item.id },
       h("div", { className: "qr-cache-text" }, item.text),
@@ -283,12 +278,6 @@
       h("div", { className: "qr-header" },
         h("strong", null, `${postMode ? "快速发帖" : "快速回复"} · ${props.version}`),
         h("button", { type: "button", title: "关闭", "data-action": "close", onClick: () => props.onAction("close") }, "×")
-      ),
-      h("div", { className: "qr-modes" },
-        h("button", { type: "button", className: postMode ? "" : "selected", "data-action": "mode-reply",
-          onClick: () => props.onAction("mode-reply") }, "回复"),
-        h("button", { type: "button", className: postMode ? "selected" : "", "data-action": "mode-post",
-          onClick: () => props.onAction("mode-post") }, "发帖")
       ),
       h("div", { className: `qr-status${props.statusError ? " error" : ""}`, "data-role": "status", role: "status" }, props.status),
       postMode ? h(React.Fragment, null,
@@ -1209,7 +1198,7 @@
         const wasPost = source?.kind === "original-post";
         href = location.href;
         dismissed = false;
-        ui.mode = isComposeScene() ? "post" : "reply";
+        if (isComposeScene()) loadPostCache();
         // X commonly closes the reply modal and changes back to the timeline
         // immediately after a successful send. Preserve the one-shot like
         // confirmation across that expected transition; the target is still
