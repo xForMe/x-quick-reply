@@ -42,6 +42,7 @@ test('generation precedes real decision and uses gateway custom header', async (
   const result = await app.send();
   assert.equal(result.ok, true);
   assert.equal(result.autoLikeAfterReply, false);
+  assert.equal(result.oneClickReply, false);
   assert.equal(result.decision.selectedId, 'c1');
   assert.equal(result.decision.confidence, 0.6);
   assert.equal(app.calls.length, 2);
@@ -61,6 +62,24 @@ test('one stored overall prompt reaches generation and decision unchanged',async
   for(const call of app.calls){
     assert.equal(JSON.parse(call.options.body).replyPrompt,replyPrompt);
     assert.equal(JSON.parse(call.options.body).replyExamples,replyExamples);
+  }
+});
+
+test('one-click setting is returned but never sent to the model request', async () => {
+  const app = runtime([{body:{schemaVersion,candidates}},{body:decision}], {tabUrl:'https://x.com/compose/post', settings:{oneClickReply:true}});
+  const result = await app.send(senderFor('https://x.com/compose/post'), 'public-reply');
+  assert.equal(result.ok,true,result.error);
+  assert.equal(result.oneClickReply,true);
+  assert.equal(result.oneClickCountdownSeconds,10);
+  assert.equal(JSON.parse(app.calls[0].options.body).oneClickReply,undefined);
+  assert.equal(JSON.parse(app.calls[0].options.body).oneClickCountdownSeconds,undefined);
+});
+
+test('invalid one-click countdown stops before any model request', async () => {
+  for (const oneClickCountdownSeconds of [2,61,2.5,'10',null]) {
+    const app = runtime([], {settings:{oneClickCountdownSeconds}});
+    const result = await app.send();
+    assert.equal(result.ok,false); assert.match(result.error,/倒计时设置无效/); assert.equal(app.calls.length,0);
   }
 });
 
@@ -135,7 +154,7 @@ test('actual page and background scripts generate and fill after a home-to-reply
   const worker=runtime([{body:{schemaVersion,candidates}},{body:decision}],{tabUrl:()=>w.location.href});
   w.setInterval=()=>1;w.clearInterval=()=>{};
   w.Element.prototype.getClientRects=()=>[{}];
-  w.chrome={runtime:{onMessage:{addListener(){},removeListener(){}},sendMessage:message=>worker.receive(message,documentSender)}};
+  w.chrome={runtime:{onMessage:{addListener(){},removeListener(){}},sendMessage:message=>worker.receive(message,documentSender)},storage:{local:{async get(){return {oneClickReply:false,autoLikeAfterReply:false};}}}};
   require('./clipboard-fixture.cjs').installClipboard(w);
   w.document.addEventListener('keydown',event=>{
     if(event.target.matches('[contenteditable="true"]') && event.key==='Backspace'){
@@ -154,7 +173,7 @@ test('actual page and background scripts generate and fill after a home-to-reply
     w.document.body.append(dialog);
     let sent=0;w.document.querySelector('[data-testid="tweetButton"]').onclick=()=>sent++;
     w.document.querySelector('[data-action="generate"]').click();
-    await new Promise(resolve=>setTimeout(resolve,180));
+    await new Promise(resolve=>setTimeout(resolve,600));
     const status=w.document.querySelector('[data-role="status"]').textContent;
     assert.equal(worker.calls.length,2,status);
     assert.equal(w.document.querySelector('[role="textbox"]').textContent,candidates[0].text);

@@ -41,6 +41,30 @@ body:
         LLM_API_KEY：已填写
         百炼配置：已填写
 
+  - type: textarea
+    id: prototype
+    attributes:
+      label: 相关原型
+      description: 提供涉及的高保真 HTML 原型路径或可访问链接；若不涉及用户可见界面，填写“不适用”并说明原因
+      placeholder: |
+        路径/链接：doc/<需求标识>/原型/index.html
+        评审状态：待评审
+    validations:
+      required: true
+
+  - type: textarea
+    id: technical
+    attributes:
+      label: 技术方案
+      description: 提供技术方案路径或可访问链接，并说明失败阶段、协议/配置边界、停止条件、验证方式和待验证事项；Issue 用于讨论，完整方案仍以技术.md 为基线
+      placeholder: |
+        路径/链接：doc/<需求标识>/技术.md
+        方案摘要：
+        待验证事项：
+        评审状态：待评审
+    validations:
+      required: true
+
   - type: checkboxes
     id: safety
     attributes:

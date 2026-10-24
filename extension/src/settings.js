@@ -23,5 +23,7 @@ export const DEFAULTS = Object.freeze({
   postPrompt: DEFAULT_POST_PROMPT,
   postExamples: "",
   autoLikeAfterReply: false,
+  oneClickReply: false,
+  oneClickCountdownSeconds: 10,
   timeoutMs: 100000
 });

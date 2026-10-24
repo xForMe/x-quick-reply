@@ -1,0 +1,297 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>快速回复 · Issue #14 一键回复原型 v2</title>
+<style>
+:root{--bg:#0b1322;--line:#2a3d5c;--text:#edf4ff;--muted:#9eb0c9;--blue:#5ea7ff;--green:#55d49b;--orange:#ffbf69;--red:#ff8b91}
+*{box-sizing:border-box}
+body{margin:0;background:radial-gradient(circle at 75% 0,#16335a 0,var(--bg) 45%);color:var(--text);font:14px/1.5 Inter,ui-sans-serif,system-ui,"Microsoft YaHei",sans-serif}
+button,input,select{font:inherit}button{cursor:pointer}
+.main{max-width:1240px;margin:auto;padding:28px 32px 48px}
+.eyebrow{color:var(--blue);font-size:12px;font-weight:700;letter-spacing:.12em}
+h1{margin:4px 0 6px;font-size:28px;letter-spacing:-.02em}
+.sub{margin:0;color:var(--muted)}
+.top{display:flex;justify-content:space-between;gap:16px;align-items:flex-start}
+.badge{padding:6px 11px;border:1px solid #365b84;border-radius:99px;color:#a9d2ff;background:#102746;font-size:12px;white-space:nowrap}
+.grid{display:grid;grid-template-columns:360px minmax(0,1fr);gap:22px;margin-top:24px}
+.card{background:linear-gradient(180deg,#14243a,#101c2e);border:1px solid var(--line);border-radius:16px}
+.card h2{font-size:15px;margin:0;padding:16px 18px;border-bottom:1px solid var(--line)}
+.card .body{padding:16px 18px}
+.row{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;padding:12px 0;border-top:1px solid #243652}
+.row:first-child{border-top:0;padding-top:0}
+.row-title{font-weight:650}.row-copy{color:var(--muted);font-size:12px;margin-top:2px}
+.toggle{flex:none;position:relative;width:46px;height:26px;border:0;border-radius:99px;background:#344862}
+.toggle:after{content:"";position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:50%;background:#dbe8f8;transition:.15s}
+.toggle.on{background:#278d6a}.toggle.on:after{left:23px}
+.num{display:flex;align-items:center;gap:6px;margin-top:8px}
+.num input{width:72px;padding:6px 8px;border-radius:8px;border:1px solid #3a5577;background:#0d1a2c;color:var(--text)}
+.num input:disabled{opacity:.45}
+.err{color:var(--red);font-size:12px;margin-top:6px}
+.ok{color:var(--green);font-size:12px;margin-top:6px}
+.save{margin-top:12px;width:100%;padding:9px;border:0;border-radius:9px;background:#398fe8;color:#fff;font-weight:700}
+.warn{margin-top:12px;padding:10px 12px;border:1px solid #6d5130;border-radius:10px;background:#302318;color:#ffd49a;font-size:12px}
+.scen{display:grid;gap:6px;margin-top:6px}
+.scen label{display:flex;gap:8px;align-items:center;font-size:13px;color:#cfe0f6}
+.tools{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.tools button{border:1px solid #426183;background:#172b47;color:#cde2ff;border-radius:8px;padding:6px 9px;font-size:12px}
+/* X 模拟页 */
+.x{position:relative;background:#f3f6f9;color:#0f1419;border-radius:16px;overflow:hidden;border:1px solid #c3d0df;min-height:620px}
+.xbar{padding:12px 18px;background:#fff;border-bottom:1px solid #e1e8ed;display:flex;justify-content:space-between;font-weight:800}
+.xbar small{font-weight:400;color:#536471}
+.tweet{background:#fff;padding:16px 18px;border-bottom:1px solid #e1e8ed}
+.th{display:flex;gap:10px;align-items:center}.av{width:38px;height:38px;border-radius:50%;background:linear-gradient(135deg,#5b9cff,#f08ab0)}
+.name{font-weight:700}.handle{color:#536471;font-size:13px}
+.tt{margin:10px 0 12px;font-size:15px}
+.acts{display:flex;gap:42px;color:#536471;font-size:13px}
+.acts button{border:0;background:none;color:#536471;padding:4px 8px;border-radius:99px}
+.acts .reply:hover{background:#e8f5fe;color:#1d9bf0}
+.overlay{position:absolute;inset:0;background:#0006;display:none;align-items:flex-start;justify-content:center;padding-top:34px}
+.overlay.show{display:flex}
+.dialog{width:min(560px,92%);background:#fff;border-radius:16px;padding:12px 16px 14px;box-shadow:0 10px 40px #0004}
+.dh{display:flex;justify-content:space-between;align-items:center}
+.close{border:0;background:none;font-size:20px;line-height:1;padding:4px 8px;border-radius:99px}
+.quote{display:flex;gap:10px;margin:8px 0;color:#0f1419}.quote .av{width:32px;height:32px}
+.quote p{margin:2px 0 0;font-size:14px}
+.reply-to{color:#536471;font-size:13px;margin:4px 0 6px 42px}
+.ed{width:100%;min-height:70px;border:0;border-bottom:1px solid #eff3f4;resize:none;font-size:17px;padding:6px 0 6px 42px;outline:none;color:#0f1419;background:transparent}
+.drow{display:flex;justify-content:flex-end;margin-top:10px}
+.send{border:0;border-radius:99px;padding:7px 18px;background:#1d9bf0;color:#fff;font-weight:700}
+.send:disabled{opacity:.5}
+.send.flash{box-shadow:0 0 0 4px #1d9bf055}
+/* 扩展面板 */
+.panel{position:absolute;right:14px;bottom:14px;width:320px;background:#10213a;color:#f1f6ff;border:1px solid #355274;border-radius:13px;padding:12px;box-shadow:0 12px 30px #0006;z-index:5}
+.panel.hidden{display:none}
+.ptop{display:flex;justify-content:space-between;align-items:center}
+.pt{font-weight:700}.pv{font-size:11px;color:#8faad0}
+.pclose{border:0;background:none;color:#8faad0;font-size:16px}
+.status{margin:9px 0;padding:8px 10px;border-radius:8px;background:#1b3351;color:#b9d7fa;font-size:12px}
+.status.error{background:#3a1d24;color:#ffb3b8}.status.success{background:#163a2c;color:#9ef0c6}
+.primary{width:100%;border:0;border-radius:9px;padding:9px;background:#398fe8;color:#fff;font-weight:700}
+.primary:disabled{opacity:.55;cursor:default}
+.cd{margin-top:10px;padding:10px;border:1px solid #2f6b55;border-radius:10px;background:#0f2a22}
+.cdh{display:flex;justify-content:space-between;align-items:center;font-size:12px;color:#9ef0c6}
+.cdn{font-size:26px;font-weight:800;color:#fff;font-variant-numeric:tabular-nums}
+.bar{height:4px;background:#24423a;border-radius:4px;overflow:hidden;margin:6px 0 8px}
+.bar i{display:block;height:100%;background:var(--green);transition:width .25s linear}
+.cdt{font-size:13px;color:#e7fff4;margin-bottom:8px}
+.cdb{display:flex;gap:8px}.cdb button{flex:1;border-radius:8px;padding:7px;font-weight:700}
+.now{border:0;background:#2aa274;color:#fff}.cancel{border:1px solid #6c8bb0;background:transparent;color:#dbe8f8}
+.cands{margin-top:8px;display:grid;gap:6px}
+.cand{padding:8px;border:1px solid #3d5b7e;border-radius:8px;background:#162b48;color:#dbeaff;text-align:left;font-size:12.5px}
+.cand.sel{border-color:#69b9ff;box-shadow:0 0 0 2px #69b9ff33}
+.cand em{display:block;margin-top:3px;color:#70dda8;font-size:11px;font-style:normal}
+.spin{display:inline-block;width:11px;height:11px;border:2px solid #b9d7fa55;border-top-color:#b9d7fa;border-radius:50%;animation:s 1s linear infinite;vertical-align:-1px;margin-right:6px}
+@keyframes s{to{transform:rotate(360deg)}}
+.log{margin-top:16px;font-size:12px;color:#8ea3bf}
+.log ol{margin:6px 0 0;padding-left:18px;max-height:150px;overflow:auto}
+.foot{margin-top:18px;color:#7f93ad;font-size:12px}.foot a{color:#94c9ff}
+@media (max-width:960px){.grid{grid-template-columns:1fr}.main{padding:20px 14px}}
+</style>
+</head>
+<body>
+<main class="main">
+  <div class="top">
+    <div>
+      <div class="eyebrow">DESIGN REVIEW · ISSUE #14 · V2</div>
+      <h1>点开回复，自动生成并倒计时发送</h1>
+      <p class="sub">点击帖子的“回复”后，扩展自动生成、按百炼选最佳候选回填，倒计时结束再发送；倒计时期间可取消、立即发送，或换一条候选直接发送。</p>
+    </div>
+    <span class="badge">原型 v2 · 已评审</span>
+  </div>
+
+  <div class="grid">
+    <div>
+      <section class="card">
+        <h2>扩展设置 · 回复行为</h2>
+        <div class="body">
+          <div class="row">
+            <div>
+              <div class="row-title">一键回复</div>
+              <div class="row-copy">点击帖子“回复”后自动生成，并在倒计时后发送公开回复。私信不适用。</div>
+              <div class="num"><span class="row-copy" style="margin:0">发送前倒计时</span><input id="secs" type="number" min="3" max="60" value="10"><span class="row-copy" style="margin:0">秒（3–60）</span></div>
+            </div>
+            <button class="toggle on" id="toggle" aria-label="切换一键回复"></button>
+          </div>
+          <div class="row">
+            <div><div class="row-title">自动点赞</div><div class="row-copy">发送确认后打开原帖并点赞，独立控制（本原型不演示）。</div></div>
+            <button class="toggle" disabled aria-label="自动点赞"></button>
+          </div>
+          <button class="save" id="save">保存</button>
+          <div id="saveMsg"></div>
+          <div class="warn">⚠ 开启后会产生 X 公开回复。仅在你点击帖子“回复”按钮时触发；页面加载、直接打开回复链接或私信不会自动发送。面板主按钮只生成并填入，由你手动发送。</div>
+        </div>
+      </section>
+
+      <section class="card" style="margin-top:16px">
+        <h2>原型演示控制（非产品界面）</h2>
+        <div class="body">
+          <div class="row-copy">模拟下一次触发的结果：</div>
+          <div class="scen">
+            <label><input type="radio" name="sc" value="ok" checked> 正常：百炼选中，发送确认成功</label>
+            <label><input type="radio" name="sc" value="reject"> 百炼拒选</label>
+            <label><input type="radio" name="sc" value="genfail"> 网关生成失败</label>
+            <label><input type="radio" name="sc" value="unconfirmed"> 发送后 5 秒未确认</label>
+          </div>
+          <div class="row-copy" style="margin-top:10px">倒计时期间模拟：</div>
+          <div class="tools">
+            <button id="simHidden">页面切到后台（倒计时继续）</button>
+            <button id="simRoute">页面路由变化</button>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <section>
+      <div class="x" id="x">
+        <div class="xbar">𝕏 <small>示例时间线 · 预览</small></div>
+        <article class="tweet">
+          <div class="th"><span class="av"></span><div><div class="name">林间观察 <span class="handle">@forest_note · 2 小时</span></div></div></div>
+          <div class="tt">把复杂的事情拆成一个今天能完成的小动作，往往比等待完整计划更有效。</div>
+          <div class="acts"><button class="reply" id="replyBtn">💬 28 回复</button><button>↻ 4</button><button>♡ 12</button></div>
+        </article>
+        <article class="tweet">
+          <div class="th"><span class="av" style="background:linear-gradient(135deg,#ffb36b,#ff6b8a)"></span><div><div class="name">咖啡与代码 <span class="handle">@cafe_dev · 3 小时</span></div></div></div>
+          <div class="tt">今天的 bug 是昨天的我留下的礼物。</div>
+          <div class="acts"><button>💬 6</button><button>↻ 1</button><button>♡ 40</button></div>
+        </article>
+
+        <div class="overlay" id="overlay">
+          <div class="dialog">
+            <div class="dh"><button class="close" id="dlgClose" aria-label="关闭">✕</button><span style="color:#1d9bf0;font-weight:700;font-size:14px">草稿</span></div>
+            <div class="quote"><span class="av"></span><div><b>林间观察</b> <span class="handle">@forest_note</span><p>把复杂的事情拆成一个今天能完成的小动作，往往比等待完整计划更有效。</p></div></div>
+            <div class="reply-to">回复 <span style="color:#1d9bf0">@forest_note</span></div>
+            <textarea class="ed" id="editor" placeholder="发布你的回复"></textarea>
+            <div class="drow"><button class="send" id="sendBtn" disabled>回复</button></div>
+          </div>
+        </div>
+
+        <div class="panel" id="panel">
+          <div class="ptop"><span class="pt">快速回复</span><span><span class="pv">v0.5.0 · 一键模式</span> <button class="pclose" id="pClose" aria-label="关闭面板">✕</button></span></div>
+          <div class="status" id="status">点击帖子的“回复”，将自动生成并在倒计时后发送。</div>
+          <button class="primary" id="primary">生成并发送回复</button>
+          <div id="cdBox"></div>
+          <div class="cands" id="cands"></div>
+        </div>
+      </div>
+      <div class="log">事件记录（原型演示用）：<ol id="log"></ol></div>
+    </section>
+  </div>
+  <p class="foot">技术方案：<a href="../技术.md">技术.md</a> · 需求与变更记录：<a href="../需求.md">需求.md</a>。本原型只表达交互意图；时间均为模拟，X 的真实 DOM、弹窗时机和发送确认需要真实页面验收。</p>
+</main>
+
+<script>
+const $=s=>document.querySelector(s);
+const CANDS=[
+  {id:"a",text:"把第一步先做小一点，确实更容易开始。",conf:86},
+  {id:"b",text:"先把今天能做的那一步找出来。",conf:9},
+  {id:"c",text:"小动作做完了，大计划自己就有方向了。",conf:5}
+];
+let cfg={on:true,secs:10};
+let st={phase:"idle",sel:null,cd:null,timers:[]};
+
+function log(t){const li=document.createElement("li");li.textContent=new Date().toLocaleTimeString()+" · "+t;$("#log").prepend(li)}
+function status(t,kind=""){const s=$("#status");s.className="status"+(kind?" "+kind:"");s.innerHTML=t}
+function clearTimers(){st.timers.forEach(clearTimeout);st.timers=[];if(st.cd){clearInterval(st.cd.iv);st.cd=null}$("#cdBox").innerHTML=""}
+function later(fn,ms){st.timers.push(setTimeout(fn,ms))}
+function scenario(){return document.querySelector('input[name=sc]:checked').value}
+function primaryState(){const p=$("#primary");p.textContent=st.phase==="gen"?"生成中，请稍候…":"生成并填入回复";p.disabled=["gen","countdown","sending"].includes(st.phase)}
+function renderCands(){
+  const box=$("#cands");box.innerHTML="";
+  if(!st.sel)return;
+  CANDS.forEach(c=>{const b=document.createElement("button");b.className="cand"+(c.id===st.sel?" sel":"");
+    b.innerHTML=c.text+(c.id===st.sel?"<em>百炼选中 · 置信度 "+c.conf+"%</em>":"");
+    b.onclick=()=>{if(c.id===st.sel||st.phase==="sending"||st.phase==="gen")return;st.sel=c.id;renderCands();$("#editor").value=c.text;if(st.phase==="countdown"){log("倒计时中切换候选：回填新候选，核验通过，立即发送");fire()}else log("切换候选并替换回填（手动发送）")};box.appendChild(b)});
+}
+function openDialog(){ $("#overlay").classList.add("show"); $("#editor").value=""; $("#sendBtn").disabled=true; }
+function closeDialog(){ $("#overlay").classList.remove("show"); }
+function dialogOpen(){return $("#overlay").classList.contains("show")}
+
+$("#replyBtn").onclick=()=>{
+  clearTimers();st.sel=null;renderCands();
+  openDialog();log("用户点击帖子“回复”（可信点击）");
+  if(!cfg.on){st.phase="idle";primaryState();status("已识别当前回复目标。点击下方按钮，生成回复并填入输入框。");log("一键回复关闭：不自动生成");return}
+  log("重新读取设置：一键回复=开，倒计时="+cfg.secs+"s");
+  later(()=>{log("弹窗出现，消费触发（仅一次）");run("auto")},400);
+};
+
+function run(trigger){
+  st.phase="gen";primaryState();
+  status('<span class="spin"></span>'+(trigger==="auto"?"已打开回复，正在自动生成回复并选择合适内容…":"正在生成回复并选择合适内容，请稍候…"));
+  const sc=scenario();
+  later(()=>{
+    if(sc==="genfail"){st.phase="idle";primaryState();status("生成失败：网关请求超时（100 秒），未回填、未发送。","error");log("生成失败，停止");return}
+    if(sc==="reject"){st.phase="idle";primaryState();status("百炼未选择合适回复，未发送，请人工起草","error");log("百炼拒选，停止");return}
+    st.sel="a";renderCands();
+    $("#editor").value=CANDS[0].text;$("#sendBtn").disabled=false;log("回填并核验通过");
+    if(trigger==="manual"){st.phase="filled";primaryState();status("已回填输入框，可切换候选后再次回填；请检查后手动发送");log("手动触发：不倒计时、不自动发送");return}
+    startCountdown();
+  },1800);
+}
+
+function startCountdown(){
+  st.phase="countdown";primaryState();
+  const total=cfg.secs*1000,deadline=Date.now()+total;
+  status("将在 "+cfg.secs+" 秒后发送，可取消");
+  $("#cdBox").innerHTML='<div class="cd"><div class="cdh"><span>即将发送公开回复</span><span class="cdn" id="cdn">'+cfg.secs+'</span></div><div class="bar"><i id="bar" style="width:100%"></i></div><div class="cdt">「'+CANDS.find(c=>c.id===st.sel).text+'」</div><div class="row-copy" style="color:#9ec9b6;margin:-4px 0 8px">点下方其他候选会替换并立即发送</div><div class="cdb"><button class="now" id="now">立即发送</button><button class="cancel" id="cancel">取消发送</button></div></div>';
+  $("#now").onclick=()=>{log("用户点击“立即发送”");fire()};
+  $("#cancel").onclick=()=>cancel("你点击了取消");
+  st.cd={deadline,iv:setInterval(()=>{
+    const left=Math.max(0,deadline-Date.now());
+    $("#cdn").textContent=Math.ceil(left/1000);$("#bar").style.width=(left/total*100)+"%";
+    status("将在 "+Math.ceil(left/1000)+" 秒后发送，可取消");
+    if(left<=0){log("倒计时结束");fire()}
+  },250)};
+  log("开始倒计时 "+cfg.secs+" 秒");
+}
+
+function cancel(reason){
+  if(st.phase!=="countdown")return;
+  clearTimers();st.phase="idle";primaryState();
+  status("已取消自动发送（"+reason+"），草稿已保留，请手动检查后发送","error");log("取消倒计时："+reason);
+}
+
+function fire(){
+  clearTimers();
+  if(!dialogOpen()){st.phase="idle";primaryState();status("发送前核验失败：回复弹窗已关闭，未发送","error");return}
+  log("到期再核验通过，点击一次“回复”");
+  st.phase="sending";primaryState();
+  $("#sendBtn").classList.add("flash");
+  status('<span class="spin"></span>已点击回复，正在等待 X 确认发送…');
+  const sc=scenario();
+  later(()=>{
+    $("#sendBtn").classList.remove("flash");
+    if(sc==="unconfirmed"){st.phase="idle";primaryState();status("一键发送未确认，草稿已保留，未自动重试","error");log("5 秒内未确认，停止");return}
+    closeDialog();st.phase="done";st.sel=null;renderCands();primaryState();
+    status("回复已发送，页面已确认","success");log("编辑器已卸载，发送确认");
+  },sc==="unconfirmed"?5000:900);
+}
+
+$("#editor").addEventListener("input",()=>{if(st.phase==="countdown")cancel("草稿被修改")});
+$("#dlgClose").onclick=()=>{const was=st.phase;closeDialog();
+  if(was==="countdown")cancel("回复弹窗已关闭");
+  else if(was==="gen"){clearTimers();st.phase="idle";primaryState();status("回复弹窗已关闭，旧请求已停止。","error");log("生成中关闭弹窗，停止")}};
+$("#simHidden").onclick=()=>{if(st.phase==="countdown")log("页面切到后台：不取消，倒计时继续，到期发送");else log("（当前不在倒计时）")};
+$("#simRoute").onclick=()=>{if(st.phase==="countdown"){cancel("页面已切换");closeDialog()}else log("（当前不在倒计时）")};
+$("#pClose").onclick=()=>{if(st.phase==="countdown")cancel("面板已关闭");$("#panel").classList.add("hidden");log("面板关闭（演示中 3 秒后恢复）");setTimeout(()=>$("#panel").classList.remove("hidden"),3000)};
+$("#primary").onclick=()=>{
+  if(!dialogOpen()){status("请点击帖子的回复按钮打开回复弹窗，或打开具体私信会话","error");return}
+  if($("#editor").value.trim()&&st.phase!=="done"){status("输入框已有草稿，请处理草稿后重新生成","error");return}
+  log("用户点击面板主按钮（手动逻辑：只生成并填入）");clearTimers();run("manual");
+};
+
+$("#toggle").onclick=()=>{const t=$("#toggle");t.classList.toggle("on");$("#secs").disabled=!t.classList.contains("on");$("#saveMsg").innerHTML=""};
+$("#save").onclick=()=>{
+  const v=$("#secs").value.trim(),n=Number(v);
+  if(!/^\d+$/.test(v)||n<3||n>60){$("#saveMsg").innerHTML='<div class="err">倒计时必须是 3–60 的整数秒，未保存。</div>';return}
+  cfg={on:$("#toggle").classList.contains("on"),secs:n};
+  $(".pv").textContent="v0.5.0 · "+(cfg.on?"一键模式":"手动模式");
+  status(cfg.on?"点击帖子的“回复”，将自动生成并在倒计时后发送。":"点击帖子的回复按钮，再点击下方按钮生成并填入。");
+  primaryState();
+  $("#saveMsg").innerHTML='<div class="ok">已保存，下次点击“回复”生效。</div>';log("设置保存：一键="+(cfg.on?"开":"关")+"，倒计时="+n+"s");
+};
+primaryState();
+</script>
+</body>
+</html>
