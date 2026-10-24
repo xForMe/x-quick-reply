@@ -622,7 +622,7 @@ def make_server(models, port):
             if not self.allowed():
                 return self.reply(403, {"error": "仅允许本机 Chrome 扩展访问"}, False)
             if self.path != "/health":
-                return self.reply(404, {"error": "未知接口"})
+                return self.reply(404, {"error": "未知接口：当前网关不含该接口，可能运行的是旧版代码，请重启网关后重试"})
             return self.reply(200, {"ok": True, "schemaVersion": SCHEMA, "promptVersion": PROMPT_VERSION,
                                     "missingGeneration": models.settings.missing("生成"),
                                     "missingDecision": models.settings.missing("决策")})
@@ -635,7 +635,7 @@ def make_server(models, port):
                       "/v1/posts/topics/decide": models.topics_decide,
                       "/v1/posts/generate": models.posts_generate}
             if self.path not in routes:
-                return self.reply(404, {"error": "未知接口"})
+                return self.reply(404, {"error": "未知接口：当前网关不含该接口，可能运行的是旧版代码，请重启网关后重试"})
             if self.headers.get_content_type() != "application/json":
                 return self.reply(415, {"error": "仅支持 JSON"})
             try:
