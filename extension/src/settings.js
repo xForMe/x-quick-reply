@@ -7,7 +7,9 @@ export const DEFAULT_REPLY_PROMPT = `像一个真实用户看到内容后顺手�
 候选只需自然地提供几种轻微不同的说法，不要为了凑数写成三条完整文案；优先保留真实聊天里的不完美感。
 以上中文只描述风格；实际回复跟随目标正文语言，用该语言自然地接话，不照搬中文例句。`;
 
-export const DEFAULT_POST_PROMPT = `面向 X 发帖，先像用户平时发帖，再考虑互动。
+export const DEFAULT_POST_PROMPT = `面向 X 发帖，先把 sourceMaterials 里的原文改写成用户自己的帖子，再考虑互动；不要围绕“哪个帖子”做转述或评论。
+把原文当作可编辑草稿：保留原文的主题、明确事实、限定条件和主要问题，改变句式和表达，让它像用户自己会发的内容。
+不要写“我看到有人发帖”“那个帖子说”“网友提到”等元叙述，除非原文明确要求讨论这条帖子；不要把原作者经历、身份或未经证实的数字写成用户自己的经历或确定事实。
 优先采用“直接问一个具体问题 → 补充自己的判断或观察 → 再自然追问一句”的节奏；不要求每条都完整走完，也可以写成连续几段记录式陈述。
 使用 2–6 个短句行，通常分成 2–4 个自然段；只在自然停顿处换行，不为了凑格式硬拆句。
 可以保留口语化标点（例如“？？？”）和中英文产品名混用，但不能机械添加；不要为了互动硬加“评论区聊聊”“报数”“站队”等话术。
@@ -16,7 +18,18 @@ export const DEFAULT_POST_PROMPT = `面向 X 发帖，先像用户平时发帖�
 不用营销腔、标签堆砌、AI 式过渡或完整漂亮的总结收尾；没有自然笑点就不写笑点。
 以上中文只描述风格；实际帖文跟随话题标题的主要语言。`;
 
-// Migrate only the previous built-in value. User-authored custom prompts stay untouched.
+// The immediately previous built-in value also needs migration so existing
+// users receive the source-rewrite rule without overwriting custom prompts.
+export const PREVIOUS_DEFAULT_POST_PROMPT = `面向 X 发帖，先像用户平时发帖，再考虑互动。
+优先采用“直接问一个具体问题 → 补充自己的判断或观察 → 再自然追问一句”的节奏；不要求每条都完整走完，也可以写成连续几段记录式陈述。
+使用 2–6 个短句行，通常分成 2–4 个自然段；只在自然停顿处换行，不为了凑格式硬拆句。
+可以保留口语化标点（例如“？？？”）和中英文产品名混用，但不能机械添加；不要为了互动硬加“评论区聊聊”“报数”“站队”等话术。
+只使用选定话题的标题与摘要事实；不捏造个人经历、数据或他人言行。
+时效性事实留有余地并列入核实提示，不写进帖文正文。
+不用营销腔、标签堆砌、AI 式过渡或完整漂亮的总结收尾；没有自然笑点就不写笑点。
+以上中文只描述风格；实际帖文跟随话题标题的主要语言。`;
+
+// Migrate only known built-in values. User-authored custom prompts stay untouched.
 export const LEGACY_DEFAULT_POST_PROMPT = `面向 X 发帖，目标是吸引目标读者留言互动。
 帖文开头用一个具体细节或反差钩住人，结尾用容易回答的开放问题或低门槛选项（例如四选一、报数、站队）。
 只使用选定话题的标题与摘要事实；不捏造个人经历、数据或他人言行。
@@ -26,7 +39,7 @@ export const LEGACY_DEFAULT_POST_PROMPT = `面向 X 发帖，目标是吸引目�
 
 export function migrateSettings(values) {
   const settings = { ...values };
-  if (settings.postPrompt === LEGACY_DEFAULT_POST_PROMPT) settings.postPrompt = DEFAULT_POST_PROMPT;
+  if (settings.postPrompt === LEGACY_DEFAULT_POST_PROMPT || settings.postPrompt === PREVIOUS_DEFAULT_POST_PROMPT) settings.postPrompt = DEFAULT_POST_PROMPT;
   return settings;
 }
 

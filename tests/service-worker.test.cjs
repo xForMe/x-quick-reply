@@ -229,18 +229,19 @@ test('only the extension content script on a conversation can call models', asyn
 // ---- quick-post 发帖：批次编排与候选缓存（话题/候选均为测试替身）----
 const POST_SCHEMA = 'quick-post.v1';
 const CACHE_KEY = 'quickPost.cache.v1';
+const FILLED_KEY = 'quickPost.filled.v1';
 const hotTopics = () => ([
-  { id: 't1', rank: 1, title: '话题一', summary: '摘要一。', tags: ['a'], repliesCount: 10 },
-  { id: 't2', rank: 2, title: '话题二', summary: '摘要二。', tags: ['b'], repliesCount: 20 },
-  { id: 't3', rank: 3, title: '话题三', summary: '摘要三。', tags: [], repliesCount: 30 },
-  { id: 't4', rank: 4, title: '话题四', summary: '摘要四。', tags: [], repliesCount: 40 },
-  { id: 't5', rank: 5, title: '话题五', summary: '摘要五。', tags: [], repliesCount: 50 }
+  { id: 't1', rank: 1, title: '话题一', summary: '摘要一。', tags: ['a'], repliesCount: 10, sourceStatus: 'available', sourceMaterials: [{ id: 's1', kind: 'tweet', text: '话题一原文。' }] },
+  { id: 't2', rank: 2, title: '话题二', summary: '摘要二。', tags: ['b'], repliesCount: 20, sourceStatus: 'available', sourceMaterials: [{ id: 's2', kind: 'tweet', text: '话题二原文。' }] },
+  { id: 't3', rank: 3, title: '话题三', summary: '摘要三。', tags: [], repliesCount: 30, sourceStatus: 'available', sourceMaterials: [{ id: 's3', kind: 'tweet', text: '话题三原文。' }] },
+  { id: 't4', rank: 4, title: '话题四', summary: '摘要四。', tags: [], repliesCount: 40, sourceStatus: 'available', sourceMaterials: [{ id: 's4', kind: 'tweet', text: '话题四原文。' }] },
+  { id: 't5', rank: 5, title: '话题五', summary: '摘要五。', tags: [], repliesCount: 50, sourceStatus: 'available', sourceMaterials: [{ id: 's5', kind: 'tweet', text: '话题五原文。' }] }
 ]);
 const postDecision = (selectedId = 'c3') => ({ schemaVersion: POST_SCHEMA, model: 'decision-model-preview',
   selectedId, reviewRequired: selectedId === null,
   confidence: 0.7, probabilities: { c1: 0.1, c2: 0.1, c3: 0.5, c4: 0.1, c5: 0.1, __none__: 0.1 } });
 const postCandidates = (count = 5) => ({ schemaVersion: POST_SCHEMA,
-  candidates: Array.from({ length: count }, (_, i) => ({ id: `c${i + 1}`, topicId: `t${i + 1}`, text: `帖文${i + 1}：你会怎么选？四选一。`, checkNotes: ['发布前核实：机制属实'] })) });
+  candidates: Array.from({ length: count }, (_, i) => ({ id: `c${i + 1}`, topicId: `t${i + 1}`, sourceMaterialIds: [`s${i + 1}`], text: `帖文${i + 1}：你会怎么选？四选一。`, checkNotes: ['发布前核实：机制属实'] })) });
 const topicsResponse = () => ({ body: { schemaVersion: POST_SCHEMA, source: 'xzhishu-topics-hot', fetchedAt: 1, topics: hotTopics() } });
 
 function postRuntime(responses, { tabUrl = 'https://x.com/compose/post', settings = {}, store = {}, getError, setError } = {}) {
@@ -273,9 +274,36 @@ function postRuntime(responses, { tabUrl = 'https://x.com/compose/post', setting
   const receive = (message, sender = senderFor('https://x.com/compose/post')) => new Promise(resolve => listener(message, sender, resolve));
   return { calls, storage, receive,
     batch: (source) => receive({ type: 'GENERATE_POST_BATCH', source }),
+    optimize: (draft) => receive({ type: 'OPTIMIZE_POST', draft }),
     list: () => receive({ type: 'LIST_POST_CACHE' }),
     cacheOp: (op, id) => receive({ type: 'POST_CACHE_OP', op, id }) };
 }
+
+test('manual post optimization uses its own route and never touches the hot-topic cache', async () => {
+  const app = postRuntime([{ body: { schemaVersion: POST_SCHEMA,
+    candidate: { id: 'manual-optimize', text: '我把原来的想法重新整理了一下。', checkNotes: ['发布前核实：具体事实'] },
+    meta: { promptVersion: 'post-policy.v3' } } }]);
+  const result = await app.optimize('我最近试了几个模型，想把实际体验整理一下再发。');
+  assert.equal(result.ok, true, result.error);
+  assert.equal(result.candidate.id, 'manual-optimize');
+  assert.match(app.calls[0].url, /\/posts\/optimize$/);
+  assert.equal(JSON.parse(app.calls[0].options.body).draft, '我最近试了几个模型，想把实际体验整理一下再发。');
+  assert.equal(app.storage[CACHE_KEY], undefined);
+});
+
+test('manual post optimization rejects invalid input and malformed output without fallback', async () => {
+  const invalid = postRuntime([]);
+  const empty = await invalid.optimize('');
+  assert.equal(empty.ok, false);
+  assert.match(empty.error, /1–4000/);
+  assert.equal(invalid.calls.length, 0);
+  for (const candidate of [{ text: '' }, { text: 'x'.repeat(281), checkNotes: [] }, { text: '合格', checkNotes: ['x'.repeat(121)] }]) {
+    const app = postRuntime([{ body: { schemaVersion: POST_SCHEMA, candidate } }]);
+    const result = await app.optimize('一段原始草稿');
+    assert.equal(result.ok, false);
+    assert.match(result.error, /非法候选/);
+  }
+});
 
 test('post batch runs fetch, one post per topic, decision and caches every draft', async () => {
   const app = postRuntime([topicsResponse(), { body: postCandidates() }, { body: postDecision() }]);
@@ -310,6 +338,31 @@ test('previously used/generated post text is skipped across batches and not rege
   assert.equal(second.historyCount, 5);
 });
 
+test('a successfully filled post is permanently filtered by source material in later batches', async () => {
+  const freshCandidates = () => ({ schemaVersion: POST_SCHEMA,
+    candidates: Array.from({ length: 5 }, (_, i) => ({ id: `c${i + 1}`, topicId: `t${i + 1}`, sourceMaterialIds: [`s${i + 1}`], text: `新帖${i + 1}：原文里的具体问题。`, checkNotes: [] })) });
+  const app = postRuntime([topicsResponse(), { body: postCandidates() }, { body: postDecision() },
+    topicsResponse(), { body: freshCandidates() }, { body: postDecision() }]);
+  const first = await app.batch();
+  const firstId = first.cache.find((item) => item.sourceTopic.id === 't1').id;
+  const marked = await app.cacheOp('mark', firstId);
+  assert.equal(marked.filledCount, 1);
+  assert.equal(app.storage[FILLED_KEY].items.length, 1);
+  const second = await app.batch();
+  assert.equal(second.skippedFilledCount, 1);
+  assert.equal(second.cache.filter((item) => item.sourceTopic.id === 't1' && !item.usedAt).length, 0);
+});
+
+test('missing source material stops the whole batch before generation', async () => {
+  const missing = topicsResponse();
+  missing.body.topics[2] = { ...missing.body.topics[2], sourceMaterials: [], sourceStatus: 'missing' };
+  const app = postRuntime([missing, { body: postCandidates() }, { body: postDecision() }]);
+  const result = await app.batch();
+  assert.equal(result.ok, false);
+  assert.match(result.error, /话题接口返回了非法话题条目/);
+  assert.equal(app.calls.length, 1);
+});
+
 test('clearing history is explicit and does not clear the candidate cache', async () => {
   const app = postRuntime([topicsResponse(), { body: postCandidates() }, { body: postDecision() }]);
   const batch = await app.batch();
@@ -330,10 +383,10 @@ test('decision abstention still caches every post but marks none recommended', a
   assert.equal(result.cache.length, 5);
 });
 
-test('over the limit the cache deletes used items first, then the oldest', async () => {
+test('over the limit the cache deletes used or excluded items first, then the oldest', async () => {
   const items = [];
   items.push({ id: 'used-1', text: '已发过的旧帖一', checkNotes: [], sourceTopic: { id: 't0', title: '旧话题' }, batchId: 'b0', createdAt: 1, usedAt: 10 });
-  items.push({ id: 'used-2', text: '已发过的旧帖二', checkNotes: [], sourceTopic: { id: 't0', title: '旧话题' }, batchId: 'b0', createdAt: 2, usedAt: 20 });
+  items.push({ id: 'excluded-2', text: '已标记的旧帖二', checkNotes: [], sourceTopic: { id: 't0', title: '旧话题' }, batchId: 'b0', createdAt: 2, excludedAt: 20 });
   for (let i = 3; i <= 28; i++) items.push({ id: `old-${i}`, text: `旧帖${i}`, checkNotes: [], sourceTopic: { id: 't0', title: '旧话题' }, batchId: 'b0', createdAt: i });
   const app = postRuntime([topicsResponse(), { body: postCandidates() }, { body: postDecision() }],
     { store: { [CACHE_KEY]: { items } } });
@@ -342,7 +395,7 @@ test('over the limit the cache deletes used items first, then the oldest', async
   assert.equal(result.evicted, 3);
   const kept = app.storage[CACHE_KEY].items;
   assert.equal(kept.length, 30);
-  assert.ok(!kept.some((item) => item.usedAt), 'used items are evicted first');
+  assert.ok(!kept.some((item) => item.usedAt || item.excludedAt), 'used or excluded items are evicted first');
   assert.ok(!kept.some((item) => item.id === 'old-3'), 'the oldest unused item is evicted next');
   assert.ok(kept.some((item) => item.id === 'old-4'));
   assert.match(JSON.stringify(result.evicted), /^3$/);
@@ -369,14 +422,20 @@ test('cache read failure is reported as a failure, never as an empty pool', asyn
   assert.match(listed.error, /cache\.read/);
 });
 
-test('mark, unmark, delete and clear keep the cache pool consistent', async () => {
+test('mark, delete and clear keep the cache pool consistent and record permanent fills', async () => {
   const mk = (id, text, usedAt) => ({ id, text, checkNotes: [], sourceTopic: { id: 't1', title: '话题一' }, batchId: 'b1', createdAt: 1, ...(usedAt ? { usedAt } : {}) });
   const app = postRuntime([], { store: { [CACHE_KEY]: { items: [mk('k1', '帖文一'), mk('k2', '帖文二')] } } });
   const marked = await app.cacheOp('mark', 'k1');
   assert.equal(marked.ok, true, marked.error);
   assert.equal(typeof marked.items.find((item) => item.id === 'k1').usedAt, 'number');
+  assert.equal(marked.filledCount, 1);
+  const excluded = await app.cacheOp('exclude', 'k2');
+  assert.equal(excluded.ok, true, excluded.error);
+  assert.equal(typeof excluded.items.find((item) => item.id === 'k2').excludedAt, 'number');
+  assert.equal(excluded.filledCount, 2);
   const unmarked = await app.cacheOp('unmark', 'k1');
-  assert.equal(unmarked.items.find((item) => item.id === 'k1').usedAt, undefined);
+  assert.equal(unmarked.ok, false);
+  assert.match(unmarked.error, /未知缓存操作/);
   const deleted = await app.cacheOp('delete', 'k2');
   assert.equal(deleted.items.length, 1);
   const missing = await app.cacheOp('mark', 'nope');

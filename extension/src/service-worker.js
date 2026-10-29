@@ -3,17 +3,20 @@ import { DEFAULTS, migrateSettings } from "./settings.js";
 const POST_SCHEMA = "quick-post.v1";
 const CACHE_KEY = "quickPost.cache.v1";
 const HISTORY_KEY = "quickPost.history.v1";
+const FILLED_KEY = "quickPost.filled.v1";
 const CACHE_LIMIT = 30;
 const HISTORY_LIMIT = 500;
+const FILLED_LIMIT = 500;
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const kind = message?.type === "GENERATE_REPLIES" ? message.context?.kind : "original-post";
-  if (!["GENERATE_REPLIES", "GENERATE_POST_BATCH", "LIST_POST_CACHE", "POST_CACHE_OP"].includes(message?.type)) return undefined;
+  if (!["GENERATE_REPLIES", "GENERATE_POST_BATCH", "OPTIMIZE_POST", "LIST_POST_CACHE", "POST_CACHE_OP"].includes(message?.type)) return undefined;
   authorizeSender(sender, message.type === "GENERATE_REPLIES" ? kind : "original-post").then(async (source) => {
     switch (message.type) {
       case "GENERATE_REPLIES": return generateReplies(message.context, source);
       case "GENERATE_POST_BATCH": return generatePostBatch(source, message.source);
-      case "LIST_POST_CACHE": return { ok: true, ...(await readCache()), historyCount: (await readHistory()).items.length };
+      case "OPTIMIZE_POST": return optimizePost(source, message.draft);
+      case "LIST_POST_CACHE": return { ok: true, ...(await readCache()), historyCount: (await readHistory()).items.length, filledCount: (await readFilled()).items.length };
       case "POST_CACHE_OP": return applyCacheOp(message);
     }
   }).then(sendResponse).catch((error) => {
@@ -88,7 +91,8 @@ async function generatePostBatch(source, board) {
   const base = gatewayBase(settings);
   const head = { schemaVersion: POST_SCHEMA, kind: "original-post", source: board || "topics", categories };
   const topicPayload = (topics) => topics.map((topic) => ({
-    id: topic.id, rank: topic.rank, title: topic.title, summary: topic.summary, tags: topic.tags, repliesCount: topic.repliesCount
+    id: topic.id, rank: topic.rank, title: topic.title, summary: topic.summary, tags: topic.tags, repliesCount: topic.repliesCount,
+    sourceMaterials: topic.sourceMaterials, sourceStatus: topic.sourceStatus
   }));
 
   const fetched = await postJson(`${base}/v1/posts/topics/fetch`, head, settings.timeoutMs);
@@ -118,20 +122,42 @@ async function generatePostBatch(source, board) {
   let cacheError = null;
   let evicted = 0;
   let skippedCount = 0;
+  let skippedHistoryCount = 0;
+  let skippedFilledCount = 0;
   let historyCount = 0;
+  let filledCount = 0;
   try {
     const appended = await appendCache(candidates, topics, fetched.source);
     cache = appended.items;
     evicted = appended.evicted;
     skippedCount = appended.skippedCount;
+    skippedHistoryCount = appended.skippedHistoryCount;
+    skippedFilledCount = appended.skippedFilledCount;
     historyCount = appended.historyCount;
+    filledCount = appended.filledCount;
   } catch (error) {
     // The batch itself is real and usable this session, but it must never be
     // presented as cached. Report the storage stage and keep the failure visible.
     cacheError = typeof error?.message === "string" ? error.message : "缓存写入失败（阶段 cache.write）";
   }
   return { ok: true, topics, candidates, decision: validDecision,
-    generation: generated.meta, cache, cacheError, evicted, skippedCount, historyCount, source: fetched.source, fetchedAt: fetched.fetchedAt };
+    generation: generated.meta, cache, cacheError, evicted, skippedCount, skippedHistoryCount, skippedFilledCount, historyCount, filledCount, source: fetched.source, fetchedAt: fetched.fetchedAt };
+}
+
+// User-authored drafts are optimized through a separate stateless route. They
+// never enter the hot-topic cache or its deduplication history.
+async function optimizePost(source, draft) {
+  const settings = await loadSettings();
+  if (typeof settings.postPrompt !== "string" || !settings.postPrompt.trim() || settings.postPrompt.length > 3000) throw new Error("请在扩展设置中填写发帖提示词（1–3000 字符）");
+  if (typeof draft !== "string" || !draft.trim() || draft.trim().length > 4000) throw new Error("原始草稿必须为 1–4000 字符");
+  const request = { schemaVersion: POST_SCHEMA, kind: "original-post", draft: draft.trim(), language: "auto", tone: settings.tone,
+    postPrompt: settings.postPrompt.trim(), postExamples: typeof settings.postExamples === "string" ? settings.postExamples.trim() : "" };
+  const base = gatewayBase(settings);
+  const optimized = await postJson(`${base}/v1/posts/optimize`, request, settings.timeoutMs);
+  if (optimized?.schemaVersion !== POST_SCHEMA) throw new Error("优化接口协议版本无效（阶段 optimize.protocol），请重启新版网关并更新扩展");
+  const candidate = validateOptimizedPost(optimized?.candidate);
+  await assertTabUnchanged(source);
+  return { ok: true, candidate, generation: optimized.meta };
 }
 
 async function loadSettings() {
@@ -157,11 +183,25 @@ function validateCacheItem(item) {
     || !Array.isArray(item.checkNotes) || item.checkNotes.length > 5
     || item.checkNotes.some((note) => typeof note !== "string" || !note.trim() || note.length > 120)
     || !item.sourceTopic || typeof item.sourceTopic.id !== "string" || typeof item.sourceTopic.title !== "string"
+    || (item.sourceMaterialIds !== undefined && (!Array.isArray(item.sourceMaterialIds) || item.sourceMaterialIds.some((id) => typeof id !== "string" || !id)))
+    || (item.sourceMaterials !== undefined && (!Array.isArray(item.sourceMaterials) || item.sourceMaterials.some((material) => !material || typeof material.id !== "string" || typeof material.kind !== "string" || typeof material.text !== "string" || !material.text.trim() || material.text.length > 2000)))
     || (item.sourcePostId !== undefined && item.sourcePostId !== null && typeof item.sourcePostId !== "string")
     || typeof item.batchId !== "string" || !item.batchId
     || typeof item.createdAt !== "number" || !Number.isFinite(item.createdAt)
-    || (item.usedAt !== undefined && item.usedAt !== null && (typeof item.usedAt !== "number" || !Number.isFinite(item.usedAt)))) {
+    || (item.usedAt !== undefined && item.usedAt !== null && (typeof item.usedAt !== "number" || !Number.isFinite(item.usedAt)))
+    || (item.excludedAt !== undefined && item.excludedAt !== null && (typeof item.excludedAt !== "number" || !Number.isFinite(item.excludedAt)))) {
     throw new Error("缓存数据结构无效（阶段 cache.read）");
+  }
+}
+
+function validateFilledItem(item) {
+  if (!item || typeof item !== "object" || typeof item.textHash !== "string" || !/^[0-9a-f]{64}$/.test(item.textHash)
+    || !Array.isArray(item.sourceMaterialIds) || item.sourceMaterialIds.some((id) => typeof id !== "string" || !id)
+    || (!Number.isFinite(item.filledAt) && !Number.isFinite(item.markedAt))
+    || (item.filledAt !== undefined && !Number.isFinite(item.filledAt))
+    || (item.markedAt !== undefined && !Number.isFinite(item.markedAt))
+    || (item.reason !== undefined && !["filled", "published"].includes(item.reason))) {
+    throw new Error("已填入历史数据结构无效（阶段 cache.read）");
   }
 }
 
@@ -217,15 +257,33 @@ async function readHistory() {
   return { items: value.items };
 }
 
+async function readFilled() {
+  let stored;
+  try { stored = await chrome.storage.local.get(FILLED_KEY); }
+  catch (error) { throw new Error(`已填入历史读取失败（阶段 cache.read）：${error?.message || "存储不可用"}`); }
+  const value = stored[FILLED_KEY];
+  if (value === undefined) return { items: [] };
+  if (!value || typeof value !== "object" || !Array.isArray(value.items) || value.items.length > FILLED_LIMIT) throw new Error("已填入历史数据结构无效（阶段 cache.read）");
+  value.items.forEach(validateFilledItem);
+  return { items: value.items };
+}
+
 async function writeCacheAndHistory(items, history) {
   try { await chrome.storage.local.set({ [CACHE_KEY]: { items }, [HISTORY_KEY]: { items: history } }); }
   catch (error) { throw new Error(`缓存写入失败（阶段 cache.write）：${error?.message || "存储不可用"}`); }
 }
 
+async function writeCacheAndFilled(items, filled) {
+  try { await chrome.storage.local.set({ [CACHE_KEY]: { items }, [FILLED_KEY]: { items: filled } }); }
+  catch (error) { throw new Error(`已填入历史写入失败（阶段 cache.write）：${error?.message || "存储不可用"}`); }
+}
+
 async function appendCache(candidates, topics, source) {
   const { items } = await readCache();
   const historyValue = await readHistory();
+  const filledValue = await readFilled();
   const history = [...historyValue.items];
+  const filled = [...filledValue.items];
   for (const item of items.filter((entry) => entry.usedAt)) {
     const textHash = await hashText(item.text);
     if (!history.some((entry) => entry.textHash === textHash)) {
@@ -236,15 +294,21 @@ async function appendCache(candidates, topics, source) {
   const batchId = crypto.randomUUID();
   const added = [];
   let skippedCount = 0;
+  let skippedHistoryCount = 0;
+  let skippedFilledCount = 0;
   let historyCount = 0;
   for (const candidate of candidates) {
     const topic = topics.find((entry) => entry.id === candidate.topicId);
     if (!topic) throw new Error("候选来源话题不存在（阶段 cache.dedup）");
     const textHash = await hashText(candidate.text);
     const sourcePostId = source === "xzhishu-tweets-hot" ? topic.id : null;
-    if (history.some((entry) => entry.textHash === textHash || (sourcePostId && entry.sourcePostId === sourcePostId))
-      || added.some((entry) => entry.textHash === textHash || (sourcePostId && entry.sourcePostId === sourcePostId))) {
+    const sourceMaterialIds = Array.isArray(candidate.sourceMaterialIds) ? candidate.sourceMaterialIds : [];
+    const historyHit = history.some((entry) => entry.textHash === textHash || (sourcePostId && entry.sourcePostId === sourcePostId));
+    const filledHit = filled.some((entry) => entry.textHash === textHash || sourceMaterialIds.some((id) => entry.sourceMaterialIds.includes(id)));
+    if (historyHit || filledHit || added.some((entry) => entry.textHash === textHash || (sourcePostId && entry.sourcePostId === sourcePostId))) {
       skippedCount += 1;
+      if (historyHit) skippedHistoryCount += 1;
+      if (filledHit) skippedFilledCount += 1;
       continue;
     }
     added.push({
@@ -252,6 +316,8 @@ async function appendCache(candidates, topics, source) {
       text: candidate.text,
       checkNotes: candidate.checkNotes,
       sourceTopic: { id: topic.id, title: topic.title },
+      sourceMaterialIds,
+      sourceMaterials: topic.sourceMaterials,
       ...(sourcePostId ? { sourcePostId } : {}),
       batchId,
       createdAt: now
@@ -261,10 +327,11 @@ async function appendCache(candidates, topics, source) {
   if (history.length > HISTORY_LIMIT) throw new Error(`去重历史已达到上限 ${HISTORY_LIMIT} 条，请先清除历史（阶段 cache.write）`);
   let merged = [...items, ...added];
   let evicted = 0;
-  // 2026-10-24 review: when over the limit, delete items already used first,
+  // When over the limit, delete items already used or manually excluded first,
   // then the oldest ones. Eviction is visible in the response, never silent.
   while (merged.length > CACHE_LIMIT) {
-    const used = merged.filter((item) => item.usedAt).sort((a, b) => a.usedAt - b.usedAt)[0];
+    const used = merged.filter((item) => item.usedAt || item.excludedAt).sort((a, b) =>
+      (a.usedAt || a.excludedAt) - (b.usedAt || b.excludedAt))[0];
     const oldest = [...merged].sort((a, b) => a.createdAt - b.createdAt)[0];
     const victim = used || oldest;
     merged = merged.filter((item) => item !== victim);
@@ -272,7 +339,7 @@ async function appendCache(candidates, topics, source) {
   }
   await writeCacheAndHistory(merged, history);
   historyCount = history.length;
-  return { items: merged, evicted, skippedCount, historyCount };
+  return { items: merged, evicted, skippedCount, skippedHistoryCount, skippedFilledCount, historyCount, filledCount: filled.length };
 }
 
 async function applyCacheOp(message) {
@@ -285,21 +352,37 @@ async function applyCacheOp(message) {
     return { ok: true, items, historyCount: 0 };
   } else if (op === "clear") {
     next = [];
-  } else if (op === "delete" || op === "mark" || op === "unmark") {
+  } else if (op === "delete" || op === "mark" || op === "exclude") {
     if (typeof id !== "string" || !id) throw new Error("缓存操作缺少条目 ID（阶段 cache.write）");
     if (!items.some((item) => item.id === id)) throw new Error("缓存条目不存在（阶段 cache.write）");
     next = items.map((item) => {
       if (item.id !== id) return item;
       if (op === "mark") return { ...item, usedAt: Date.now() };
-      if (op === "unmark") { const { usedAt, ...rest } = item; return rest; }
+      if (op === "exclude") return { ...item, excludedAt: Date.now() };
       return item;
     });
     if (op === "delete") next = items.filter((item) => item.id !== id);
   } else {
     throw new Error("未知缓存操作（阶段 cache.write）");
   }
+  if (op === "mark" || op === "exclude") {
+    const item = items.find((entry) => entry.id === id);
+    const filledValue = await readFilled();
+    const filled = [...filledValue.items];
+    const textHash = await hashText(item.text);
+    const sourceMaterialIds = Array.isArray(item.sourceMaterialIds) ? item.sourceMaterialIds : [];
+    if (!filled.some((entry) => entry.textHash === textHash || sourceMaterialIds.some((sourceId) => entry.sourceMaterialIds.includes(sourceId)))) {
+      const timestamp = Date.now();
+      filled.push(op === "mark"
+        ? { textHash, sourceMaterialIds: [...sourceMaterialIds], filledAt: timestamp, reason: "filled" }
+        : { textHash, sourceMaterialIds: [...sourceMaterialIds], markedAt: timestamp, reason: "published" });
+    }
+    if (filled.length > FILLED_LIMIT) throw new Error(`已填入历史已达到上限 ${FILLED_LIMIT} 条，请先清理（阶段 cache.write）`);
+    await writeCacheAndFilled(next, filled);
+    return { ok: true, items: next, filledCount: filled.length };
+  }
   await writeCache(next);
-  return { ok: true, items: next };
+  return { ok: true, items: next, filledCount: (await readFilled()).items.length };
 }
 
 async function writeStorage(entries) {
@@ -340,11 +423,15 @@ function validateTopics(value) {
     if (!item || typeof item.id !== "string" || !item.id || seen.has(item.id)
       || typeof item.title !== "string" || !item.title.trim() || item.title.length > 300
       || typeof item.summary !== "string" || item.summary.length > 2000
+      || item.sourceStatus !== "available" || !Array.isArray(item.sourceMaterials) || !item.sourceMaterials.length
+      || item.sourceMaterials.some((material) => !material || typeof material.id !== "string" || !material.id
+        || !["tweet", "article"].includes(material.kind) || typeof material.text !== "string" || !material.text.trim() || material.text.length > 2000)
       || !Array.isArray(item.tags) || item.tags.some((tag) => typeof tag !== "string" || tag.length > 40)
       || !Number.isInteger(item.repliesCount) || item.repliesCount < 0
       || !Number.isInteger(item.rank) || item.rank < 1) throw new Error("话题接口返回了非法话题条目");
     seen.add(item.id);
-    return { id: item.id, rank: item.rank, title: item.title.trim(), summary: item.summary, tags: item.tags, repliesCount: item.repliesCount };
+    return { id: item.id, rank: item.rank, title: item.title.trim(), summary: item.summary, tags: item.tags, repliesCount: item.repliesCount,
+      sourceStatus: item.sourceStatus, sourceMaterials: item.sourceMaterials.map((material) => ({ id: material.id, kind: material.kind, text: material.text.trim() })) };
   });
 }
 
@@ -376,12 +463,23 @@ function validatePostCandidates(value, topics) {
     if (!item || typeof item.id !== "string" || !/^c[1-5]$/.test(item.id) || seen.has(item.id)
       || typeof item.topicId !== "string" || !topicIds.has(item.topicId) || covered.has(item.topicId)
       || typeof item.text !== "string" || !item.text.trim() || item.text.length > 280
+      || !Array.isArray(item.sourceMaterialIds) || item.sourceMaterialIds.some((id) => typeof id !== "string" || !id
+        || !topics.find((topic) => topic.id === item.topicId).sourceMaterials.some((material) => material.id === id))
       || !Array.isArray(item.checkNotes) || item.checkNotes.length > 5
       || item.checkNotes.some((note) => typeof note !== "string" || !note.trim() || note.length > 120)) throw new Error("帖文接口返回了非法候选（每个话题必须恰好一条）");
     seen.add(item.id);
     covered.add(item.topicId);
-    return { id: item.id, topicId: item.topicId, text: item.text.trim(), checkNotes: item.checkNotes.map((note) => note.trim()) };
+    return { id: item.id, topicId: item.topicId, sourceMaterialIds: [...item.sourceMaterialIds], text: item.text.trim(), checkNotes: item.checkNotes.map((note) => note.trim()) };
   });
+}
+
+function validateOptimizedPost(value) {
+  if (!value || typeof value !== "object" || typeof value.text !== "string" || !value.text.trim() || value.text.length > 280
+    || !Array.isArray(value.checkNotes) || value.checkNotes.length > 5
+    || value.checkNotes.some((note) => typeof note !== "string" || !note.trim() || note.length > 120)) {
+    throw new Error("优化接口返回了非法候选（阶段 optimize.parse）");
+  }
+  return { id: "manual-optimize", text: value.text.trim(), checkNotes: value.checkNotes.map((note) => note.trim()), manual: true };
 }
 
 function validateDecision(value, candidates) {

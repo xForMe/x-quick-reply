@@ -10,7 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from gateway import (GatewayError, Models, Settings, parse_hot_tweets,
-                     validate_post_generate_request)
+                     validate_post_generate_request, validate_post_optimize_request)
 
 
 def settings():
@@ -22,14 +22,16 @@ def settings():
 def topics():
     return [
         {"id": "t1", "rank": 1, "title": "话题一", "summary": "摘要一。",
-         "tags": ["a"], "repliesCount": 10},
+         "tags": ["a"], "repliesCount": 10,
+         "sourceMaterials": [{"id": "s1", "kind": "tweet", "text": "话题一的原始内容。"}], "sourceStatus": "available"},
         {"id": "t2", "rank": 2, "title": "话题二", "summary": "摘要二。",
-         "tags": ["b"], "repliesCount": 20},
+         "tags": ["b"], "repliesCount": 20,
+         "sourceMaterials": [{"id": "s2", "kind": "tweet", "text": "话题二的原始内容。"}], "sourceStatus": "available"},
     ]
 
 
 def post_items(count=2):
-    return [{"topicId": f"t{i+1}", "text": f"帖文{i+1}：你会怎么选？四选一。",
+    return [{"topicId": f"t{i+1}", "sourceMaterialIds": [f"s{i+1}"], "text": f"帖文{i+1}：你会怎么选？四选一。",
              "checkNotes": ["发布前核实：机制属实"]} for i in range(count)]
 
 
@@ -62,10 +64,12 @@ class PostModelTests(unittest.TestCase):
         self.assertEqual(len(result["candidates"]), 2)
         self.assertEqual([item["topicId"] for item in result["candidates"]], ["t1", "t2"])
         self.assertEqual(result["candidates"][0]["id"], "c1")
-        self.assertEqual(result["meta"]["promptVersion"], "post-policy.v2")
+        self.assertEqual(result["meta"]["promptVersion"], "post-policy.v3")
         self.assertIn(models.post_policy, calls[0][2]["messages"][0]["content"])
         self.assertIn("直接问一个具体问题", calls[0][2]["messages"][0]["content"])
         self.assertIn("不要为了互动硬加", calls[0][2]["messages"][0]["content"])
+        self.assertIn("sourceMaterials 是原始推文或文章内容", calls[0][2]["messages"][0]["content"])
+        self.assertIn("不要写成‘我看到有人发帖’", calls[0][2]["messages"][0]["content"])
         body = json.loads(calls[0][2]["messages"][1]["content"])
         self.assertEqual([t["id"] for t in body["topics"]], ["t1", "t2"])
 
@@ -76,6 +80,16 @@ class PostModelTests(unittest.TestCase):
         system = calls[0][2]["messages"][0]["content"]
         self.assertIn("句式、分行、口语标点、追问节奏", system)
         self.assertIn("不能照抄其中的内容、人物、经历", system)
+
+    def test_generation_requires_and_preserves_source_material_references(self):
+        models, calls = self.models()
+        result = models.posts_generate(post_request())
+        body = json.loads(calls[0][2]["messages"][1]["content"])
+        self.assertEqual(body["topics"][0]["sourceMaterials"][0]["id"], "s1")
+        self.assertEqual(result["candidates"][0]["sourceMaterialIds"], ["s1"])
+        bad = {**post_request(), "topics": [{k: v for k, v in topics()[0].items() if k != "sourceMaterials"}]}
+        with self.assertRaisesRegex(GatewayError, "原始内容缺失"):
+            models.posts_generate(bad)
 
     def test_generation_rejects_missing_or_duplicated_topic_coverage(self):
         def run(items):
@@ -98,6 +112,48 @@ class PostModelTests(unittest.TestCase):
             with self.subTest(bad=str(bad)[:60]), self.assertRaises(GatewayError) as caught:
                 validate_post_generate_request(bad)
             self.assertEqual(caught.exception.status, 400)
+
+    def test_manual_optimize_preserves_draft_boundary_and_returns_one_candidate(self):
+        calls = []
+
+        def transport(*args):
+            calls.append(args)
+            return {"choices": [{"finish_reason": "stop", "message": {"content": json.dumps({
+                "candidate": {"text": "我把这件事重新整理了一下，先把实际体验说清楚。",
+                               "checkNotes": ["发布前核实：具体价格和时间"]}})}}]}
+
+        models = Models(settings(), transport)
+        request = {"schemaVersion": "quick-post.v1", "kind": "original-post",
+                   "draft": "我最近试了几个模型，想把实际体验整理清楚再发。",
+                   "language": "auto", "tone": "natural",
+                   "postPrompt": "保留我的语气，帮我说得更自然。", "postExamples": ""}
+        result = models.posts_optimize(request)
+        self.assertEqual(result["candidate"]["id"], "manual-optimize")
+        self.assertEqual(result["meta"]["promptVersion"], "post-policy.v3")
+        self.assertIn("原始草稿如下", calls[0][2]["messages"][0]["content"])
+        body = json.loads(calls[0][2]["messages"][1]["content"])
+        self.assertNotIn("topics", body)
+        self.assertEqual(body["draft"], request["draft"])
+
+    def test_manual_optimize_rejects_invalid_input_without_model_call(self):
+        models, calls = self.models(transport=lambda *a: self.fail("unexpected model call"))
+        base = {"schemaVersion": "quick-post.v1", "kind": "original-post", "draft": "有内容",
+                "language": "auto", "tone": "natural", "postPrompt": "保持自然", "postExamples": ""}
+        for bad in [dict(base, draft=""), dict(base, draft="字" * 4001), dict(base, language="zh-CN"), dict(base, postPrompt="")]:
+            with self.subTest(bad=str(bad)[:60]), self.assertRaises(GatewayError):
+                validate_post_optimize_request(bad)
+        self.assertEqual(calls, [])
+
+    def test_manual_optimize_rejects_malformed_model_result(self):
+        request = {"schemaVersion": "quick-post.v1", "kind": "original-post", "draft": "有内容",
+                   "language": "auto", "tone": "natural", "postPrompt": "保持自然", "postExamples": ""}
+        for candidate in [{}, {"text": ""}, {"text": "字" * 281, "checkNotes": []},
+                          {"text": "合格", "checkNotes": ["x" * 121]}]:
+            def transport(*args, candidate=candidate):
+                return {"choices": [{"finish_reason": "stop", "message": {"content": json.dumps({"candidate": candidate})}}]}
+            models = Models(settings(), transport)
+            with self.subTest(candidate=str(candidate)[:40]), self.assertRaises(GatewayError):
+                models.posts_optimize(request)
 
     def test_decision_recommends_one_post_or_abstains(self):
         seen = {}
