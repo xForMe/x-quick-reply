@@ -37,8 +37,11 @@
   // quick-post: draft cache is owned by the service worker; these are views.
   let postCache = [];
   let postHistoryCount = 0;
+  let postFilledCount = 0;
   let postBatch = null;
   let postFilledId = null;
+  let postToolMode = "batch";
+  let postOptimize = { draft: "", candidate: null, loading: false, requestId: 0, filled: false };
   let ui = { status: READY_TEXT, statusError: false, generating: false, routeHidden: false, countdown: null };
   const autoLike = createAutoLikeController({
     getSource: () => source,
@@ -82,6 +85,8 @@
       if (type === "OPEN_QUICK_POST") {
         // 发帖是独立入口：只在发帖场景打开发帖面板，不与回复混用。
         if (!isComposeScene()) throw new Error("请先打开发帖弹窗或 /compose/post，再点击“发帖助手”");
+        postToolMode = "batch";
+        postOptimize = { draft: "", candidate: null, loading: false, requestId: postOptimize.requestId + 1, filled: false };
         readComposeContext();
         loadPostCache();
         setStatus(`已识别发帖框。点击“生成新一批”，从 xzhishu 热榜取话题并生成帖文。`);
@@ -177,7 +182,10 @@
       postCache: postCache,
       postBatch: postBatch,
       postFilledId: postFilledId,
+      postToolMode,
+      postOptimize,
       postHistoryCount,
+      postFilledCount,
       countdown: ui.countdown,
       sending: !!sendConfirmation,
       onAction: handlePanelAction,
@@ -212,11 +220,27 @@
       case "post-batch-tweets":
         generateBatch("tweets");
         break;
+      case "post-mode":
+        if (argument !== "batch" && argument !== "optimize") throw new Error("未知发帖模式");
+        postToolMode = argument;
+        if (argument === "optimize") setStatus(postOptimize.draft.trim() ? "已输入草稿，可以开始优化" : "请输入你想优化的发帖内容");
+        else setStatus("发帖模式：候选按来源话题分组。每次选 1 条填入，发帖由你人工点击。");
+        renderPanel();
+        break;
+      case "post-input":
+        updatePostOptimizeDraft(argument);
+        break;
+      case "post-optimize":
+        optimizePostDraft();
+        break;
+      case "post-optimize-fill":
+        fillOptimizedPost();
+        break;
       case "post-fill":
         fillPostItem(argument);
         break;
-      case "post-unmark":
-        postCacheOp("unmark", argument);
+      case "post-exclude":
+        postCacheOp("exclude", argument);
         break;
       case "post-delete":
         postCacheOp("delete", argument);
@@ -266,6 +290,8 @@
       `选择置信度：${(props.decision.confidence * 100).toFixed(1)}%（不代表回复正确率）`
     ));
     const postMode = props.panelKind === "post";
+    const optimizeMode = postMode && props.postToolMode === "optimize";
+    const optimization = props.postOptimize || { draft: "", candidate: null, loading: false, filled: false };
     const postSource = props.postBatch?.board || "热门话题榜";
     const postBatchAction = postSource === "热门推文榜" ? "post-batch-tweets" : "post-batch";
     const postSourceAction = postSource === "热门推文榜" ? "post-batch" : "post-batch-tweets";
@@ -276,7 +302,7 @@
     // Cache entries are grouped by their source topic: each topic keeps its
     // own post(s) underneath instead of one flat, cramped list.
     const groups = [];
-    for (const item of props.postCache) {
+    for (const item of props.postCache.filter((entry) => !entry.usedAt && !entry.excludedAt)) {
       let group = groups.find((entry) => entry.id === item.sourceTopic.id);
       if (!group) { group = { id: item.sourceTopic.id, title: item.sourceTopic.title, items: [] }; groups.push(group); }
       group.items.push(item);
@@ -287,17 +313,17 @@
       h("div", { className: "qr-topic-posts" }, group.items.map(item => h(
         "div", { key: item.id, className: `qr-cache-item${item.usedAt ? " used" : ""}`, "data-cache-item": item.id },
         h("div", { className: "qr-cache-top" },
-          h("span", { className: `qr-cache-tag${item.usedAt ? " used" : ""}` }, item.usedAt ? "已填入草稿" : "可选候选"),
-          h("span", { className: "qr-cache-meta" }, `${new Date(item.createdAt).toLocaleString()}${item.text === props.postBatch?.recommendedText ? " · 决策推荐" : ""}${item.usedAt ? " · 已发过" : ""}${item.sessionOnly ? " · 未入缓存" : ""}`)),
+          h("span", { className: "qr-cache-tag" }, "可选候选"),
+          h("span", { className: "qr-cache-meta" }, `${new Date(item.createdAt).toLocaleString()}${item.text === props.postBatch?.recommendedText ? " · 决策推荐" : ""}${item.sessionOnly ? " · 未入缓存" : ""}`)),
+        item.sourceMaterials?.length ? h("details", { className: "qr-cache-source", open: true }, h("summary", null, "参考原文"), item.sourceMaterials.map((material) => h("blockquote", { key: material.id }, material.text))) : null,
         h("div", { className: "qr-cache-text" }, item.text),
         item.checkNotes.length ? h("div", { className: "qr-cache-check" }, item.checkNotes.join("；")) : null,
         h("div", { className: "qr-cache-actions" },
-          item.usedAt
-            ? h("button", { type: "button", "data-action": "post-unmark", disabled: props.pendingFill,
-                onClick: () => props.onAction("post-unmark", item.id) }, "放回可选")
-            : h("button", { type: "button", className: "qr-fill", "data-action": "post-fill", disabled: props.pendingFill,
-                onClick: () => props.onAction("post-fill", item.id) }, "填入草稿"),
-          h("button", { type: "button", "data-action": "post-delete", disabled: props.pendingFill,
+          h("button", { type: "button", className: "qr-fill", title: "填入草稿", "data-action": "post-fill", disabled: props.pendingFill,
+            onClick: () => props.onAction("post-fill", item.id) }, "填入"),
+          h("button", { type: "button", title: "标记已发，不再生成", "data-action": "post-exclude", disabled: props.pendingFill,
+            onClick: () => props.onAction("post-exclude", item.id) }, "已发，隐藏"),
+          h("button", { type: "button", title: "删除候选", "data-action": "post-delete", disabled: props.pendingFill,
             onClick: () => props.onAction("post-delete", item.id) }, "删除")
         )
       )))
@@ -308,7 +334,32 @@
         h("button", { type: "button", title: "关闭", "data-action": "close", onClick: () => props.onAction("close") }, "×")
       ),
       postMode ? h(React.Fragment, null,
-        h("div", { className: "qr-post-body" },
+        h("div", { className: "qr-post-modes", role: "tablist", "aria-label": "发帖方式" },
+          h("button", { type: "button", role: "tab", "aria-selected": String(!optimizeMode), className: !optimizeMode ? "active" : "", "data-action": "post-mode-batch", onClick: () => props.onAction("post-mode", "batch") }, "热榜生成"),
+          h("button", { type: "button", role: "tab", "aria-selected": String(optimizeMode), className: optimizeMode ? "active" : "", "data-action": "post-mode-optimize", onClick: () => props.onAction("post-mode", "optimize") }, "输入优化")
+        ),
+        optimizeMode ? h("div", { className: "qr-post-optimize" },
+          h("p", { className: "qr-optimize-hint" }, "先写你想表达的内容，助手只调整表达和分行，不补充外部事实。"),
+          h("label", { className: "qr-optimize-label", htmlFor: "qr-post-draft" },
+            h("span", null, "我的原始草稿"),
+            h("span", { className: "qr-optimize-count" }, `${optimization.draft.length} / 4000`)),
+          h("textarea", { id: "qr-post-draft", className: "qr-post-draft", value: optimization.draft, maxLength: 4000, placeholder: "输入你想发的内容…", disabled: optimization.loading || props.pendingFill,
+            onChange: event => props.onAction("post-input", event.target.value) }),
+          h("div", { className: `qr-status${props.statusError ? " error" : ""}`, "data-role": "status", role: "status" }, props.status),
+          h("button", { type: "button", className: "qr-primary", "data-action": "post-optimize", disabled: optimization.loading || props.pendingFill || !optimization.draft.trim() || optimization.draft.trim().length > 4000,
+            onClick: () => props.onAction("post-optimize") }, optimization.loading ? "优化中，请稍候…" : "优化内容"),
+          optimization.candidate ? h("div", { className: "qr-optimize-result", "data-role": "optimized-result" },
+            h("div", { className: "qr-optimize-result-head" }, h("strong", null, "优化候选"), h("span", null, optimization.filled ? "已填入草稿" : "请检查")),
+            h("div", { className: "qr-optimize-text" }, optimization.candidate.text),
+            optimization.candidate.checkNotes.length ? h("div", { className: "qr-cache-check" }, optimization.candidate.checkNotes.join("；")) : null,
+            h("div", { className: "qr-cache-actions" },
+              h("button", { type: "button", className: "qr-fill", "data-action": "post-optimize-fill", disabled: props.pendingFill || optimization.filled,
+                onClick: () => props.onAction("post-optimize-fill") }, optimization.filled ? "已填入" : "填入发帖框"),
+              h("button", { type: "button", "data-action": "post-optimize-again", disabled: optimization.loading || props.pendingFill,
+                onClick: () => props.onAction("post-optimize") }, "重新优化")
+            )) : null,
+          h("div", { className: "qr-optimize-note" }, "优化结果只在本次面板内保留，不进入热榜缓存；填入后仍需你手动点击 X 的发帖按钮。")
+        ) : h("div", { className: "qr-post-body" },
           h("div", { className: "qr-post-source" },
             h("span", { className: "qr-source-pill" }, h("span", { "aria-hidden": "true" }, "●"), `当前来源：${postSource}`),
             h("button", { type: "button", className: "qr-source-switch", "data-action": postSourceAction,
@@ -324,7 +375,7 @@
           h("button", { type: "button", className: "qr-primary", "data-action": postBatchAction, disabled: props.generating || props.pendingFill,
             onClick: () => props.onAction(postBatchAction) }, props.generating ? "生成中，请稍候…" : "生成新一批"),
           h("div", { className: "qr-cache-head" },
-            h("span", null, `候选缓存池 · ${props.postCache.length} 条`, h("small", { className: "qr-history-count" }, `历史去重 ${props.postHistoryCount} 条`)),
+            h("span", null, `候选缓存池 · ${props.postCache.filter((item) => !item.usedAt && !item.excludedAt).length} 条`, h("small", { className: "qr-history-count" }, `历史去重 ${props.postHistoryCount} 条 · 已用/已标记 ${props.postFilledCount} 条`)),
             h("button", { type: "button", "data-action": "post-clear-history", disabled: props.pendingFill || !props.postHistoryCount,
               onClick: () => props.onAction("post-clear-history") }, "清除去重历史"),
             h("button", { type: "button", "data-action": "post-clear", disabled: props.pendingFill || !props.postCache.length,
@@ -435,7 +486,8 @@
       postCache = response.candidates.map((candidate) => {
         const topic = response.topics.find((entry) => entry.id === candidate.topicId);
         return { id: candidate.id, text: candidate.text, checkNotes: candidate.checkNotes,
-          sourceTopic: { id: topic.id, title: topic.title }, batchId: "session",
+          sourceTopic: { id: topic.id, title: topic.title }, sourceMaterialIds: candidate.sourceMaterialIds,
+          sourceMaterials: topic.sourceMaterials, batchId: "session",
           createdAt: Date.now(), sessionOnly: true };
       });
       renderPanel();
@@ -445,11 +497,74 @@
     postHistoryCount = response.historyCount ?? postHistoryCount + response.candidates.length - (response.skippedCount || 0);
     let text = `本批来源：${postBatch.board}。候选已入缓存池（共 ${response.cache.length} 条）；`
       + (recommended ? "已标记 1 条推荐。" : "本批未标记推荐，请自选。") + "每次选 1 条填入。";
-    if (response.skippedCount) text += ` 已跳过 ${response.skippedCount} 条历史重复。`;
-    if (!response.cache.length && response.skippedCount) text = `本批 ${response.skippedCount} 条候选全部命中历史去重，未新增缓存；未自动重试或换源。`;
+    if (response.skippedCount) text += ` 已跳过 ${response.skippedHistoryCount || 0} 条历史重复、${response.skippedFilledCount || 0} 条已填入候选。`;
+    if (!response.cache.length && response.skippedCount) text = `本批候选全部命中历史去重或已填入记录，未新增缓存；未自动重试或换源。`;
     if (response.evicted) text += ` 缓存已满，已自动清理 ${response.evicted} 条（先已发过的，再最旧的）。`;
     setStatus(text);
     renderPanel();
+  }
+
+  function updatePostOptimizeDraft(value) {
+    if (typeof value !== "string") return setStatus("原始草稿内容无效", true);
+    postOptimize.requestId += 1;
+    postOptimize = { ...postOptimize, draft: value, candidate: null, loading: false, requestId: postOptimize.requestId, filled: false };
+    setStatus(value.trim() ? "已输入草稿，可以开始优化" : "请输入你想优化的发帖内容");
+  }
+
+  async function optimizePostDraft() {
+    const draft = postOptimize.draft;
+    if (!draft.trim()) return setStatus("请输入你想优化的发帖内容", true);
+    if (draft.trim().length > 4000) return setStatus("原始草稿不能超过 4000 字符", true);
+    if (pendingFill || postOptimize.loading) return;
+    let context;
+    try { context = readComposeContext(); }
+    catch (error) { return setStatus(error instanceof Error ? error.message : "读取发帖框失败", true); }
+    const requestId = postOptimize.requestId + 1;
+    postOptimize = { ...postOptimize, loading: true, candidate: null, requestId, filled: false };
+    source = { url: location.href, kind: "original-post", key: contextKey(context), editor: context.editor,
+      target: context.target, dialog: context.dialog, textNode: null, targetLinks: [], draft: editorText(context.editor) };
+    setGenerating(true);
+    setStatus("正在优化你的草稿，请稍候…");
+    let response;
+    try {
+      response = await chrome.runtime.sendMessage({ type: "OPTIMIZE_POST", draft });
+    } catch (error) {
+      if (requestId !== postOptimize.requestId) return;
+      postOptimize = { ...postOptimize, loading: false, candidate: null };
+      setGenerating(false);
+      return setStatus(`优化请求失败：${error instanceof Error ? error.message : error}`, true);
+    }
+    if (requestId !== postOptimize.requestId) return;
+    postOptimize = { ...postOptimize, loading: false };
+    setGenerating(false);
+    if (!sourceIsCurrent()) return setStatus("发帖框已变化，优化结果已失效，请重新确认后优化", true);
+    if (!response?.ok) return setStatus(response?.error || "优化失败", true);
+    try {
+      const candidate = validateOptimizedPostResponse(response.candidate);
+      postOptimize = { ...postOptimize, candidate, filled: false };
+      setStatus("优化完成。请检查正文和核实提示，再决定是否填入 X 草稿");
+    } catch (error) {
+      postOptimize = { ...postOptimize, candidate: null, filled: false };
+      setStatus(error instanceof Error ? error.message : "优化接口返回了非法结果", true);
+    }
+  }
+
+  function validateOptimizedPostResponse(value) {
+    if (!value || typeof value !== "object" || typeof value.text !== "string" || !value.text.trim() || value.text.length > 280
+      || !Array.isArray(value.checkNotes) || value.checkNotes.length > 5
+      || value.checkNotes.some((note) => typeof note !== "string" || !note.trim() || note.length > 120)) {
+      throw new Error("优化接口返回了非法候选（阶段 optimize.parse）");
+    }
+    return { id: "manual-optimize", text: value.text.trim(), checkNotes: value.checkNotes.map((note) => note.trim()), manual: true };
+  }
+
+  async function fillOptimizedPost() {
+    const candidate = postOptimize.candidate;
+    if (!candidate) return setStatus("请先优化一条发帖内容", true);
+    if (postOptimize.filled) return setStatus("已填入此条优化内容，请检查后手动点击发帖按钮");
+    if (!sourceIsCurrent()) return invalidate("回填失败（阶段 fill.verify）：发帖框或页面已变化，请重新优化");
+    if (!source.owned && editorText(source.editor).trim()) return invalidate("回填失败（阶段 fill.draft）：发帖框已有用户草稿，未覆盖");
+    return fillCandidate(candidate);
   }
 
   function ensurePostSource() {
@@ -468,7 +583,7 @@
   async function fillPostItem(itemId) {
     const item = postCache.find((entry) => entry.id === itemId);
     if (!item) return setStatus("缓存条目不存在", true);
-    if (item.usedAt) return setStatus("该条已标记“已发过”，可点“放回可选”后再使用", true);
+    if (item.usedAt || item.excludedAt) return setStatus("该条已经被排除，不再推荐", true);
     if (pendingFill) return;
     if (!ensurePostSource()) return setStatus("发帖框已有草稿或目标变化；请处理草稿后重试", true);
     if (source.owned && source.draft === item.text) return setStatus("已填入此条，无需重复填入；请检查后手动点击发帖");
@@ -476,20 +591,26 @@
   }
 
   async function onPostFilled(item) {
+    if (item?.manual) {
+      postOptimize = { ...postOptimize, filled: true };
+      setStatus("已填入发帖框草稿（未发送）；请检查后手动点击发帖按钮");
+      renderPanel();
+      return;
+    }
     if (item.sessionOnly) {
       postFilledId = item.id;
+      postCache = postCache.map((entry) => entry.id === item.id ? { ...entry, usedAt: Date.now() } : entry);
+      postFilledCount += 1;
+      setStatus("已填入发帖框草稿；本批缓存写入失败，这条仅本次隐藏，未宣称已永久记录", true);
       renderPanel();
       return;
     }
     try {
-      if (postFilledId && postFilledId !== item.id) {
-        const restored = await chrome.runtime.sendMessage({ type: "POST_CACHE_OP", op: "unmark", id: postFilledId });
-        if (!restored?.ok) throw new Error(restored?.error || "放回候选失败");
-      }
       const marked = await chrome.runtime.sendMessage({ type: "POST_CACHE_OP", op: "mark", id: item.id });
       if (!marked?.ok) throw new Error(marked?.error || "标记候选失败");
       postFilledId = item.id;
       postCache = marked.items;
+      postFilledCount = marked.filledCount || postFilledCount + 1;
     } catch (error) {
       return setStatus(`候选计账失败：${error instanceof Error ? error.message : error}；草稿已填入，请自行核对`, true);
     }
@@ -503,11 +624,11 @@
       if (!response?.ok) throw new Error(response?.error || "缓存操作失败");
       postCache = response.items;
       if (op === "clear-history") postHistoryCount = response.historyCount || 0;
+      if (response.filledCount !== undefined) postFilledCount = response.filledCount;
       if (op === "clear") postFilledId = null;
-      if (op === "unmark" && postFilledId === id) postFilledId = null;
       if (op === "delete" && postFilledId === id) postFilledId = null;
       renderPanel();
-      setStatus(op === "clear-history" ? "已清除历史去重记录；相同正文下次可能再次进入缓存" : op === "clear" ? "已清空候选缓存池" : op === "delete" ? "已删除 1 条缓存候选" : "已放回可选列表（草稿文本仍留在发帖框，由你处理）");
+      setStatus(op === "clear-history" ? "已清除历史去重记录；相同正文下次可能再次进入缓存" : op === "clear" ? "已清空候选缓存池" : op === "delete" ? "已删除 1 条缓存候选" : op === "exclude" ? "已标记为已发，不再生成相同原文候选" : "缓存操作已完成");
     } catch (error) {
       return setStatus(`缓存操作失败：${error instanceof Error ? error.message : error}`, true);
     }
@@ -519,7 +640,8 @@
       if (!response?.ok) throw new Error(response?.error || "缓存读取失败");
       postCache = response.items;
       postHistoryCount = response.historyCount || 0;
-      setStatus(`发帖模式：候选按来源话题分组。当前缓存 ${postCache.length} 条，历史去重 ${postHistoryCount} 条，每次选 1 条填入，发帖由你人工点击。`);
+      postFilledCount = response.filledCount || 0;
+      setStatus(`发帖模式：候选按来源话题分组。当前缓存 ${postCache.filter((item) => !item.usedAt && !item.excludedAt).length} 条，历史去重 ${postHistoryCount} 条，已用/已标记 ${postFilledCount} 条，每次选 1 条填入，发帖由你人工点击。`);
     } catch (error) {
       return setStatus(error instanceof Error ? error.message : "缓存读取失败", true);
     }
@@ -1188,6 +1310,7 @@
     } // Caller reports stale/invalid context and stops all filling.
   }
   function invalidate(message, error = true) {
+    const wasManualPost = source?.kind === "original-post" && postToolMode === "optimize";
     generation++;
     clearTimeout(pendingFill?.timer);
     pendingFill = null;
@@ -1196,6 +1319,7 @@
     clearSendConfirmation();
     autoLike.cancel(true);
     source = null;
+    if (wasManualPost) postOptimize = { ...postOptimize, candidate: null, loading: false, requestId: postOptimize.requestId + 1, filled: false };
     state = { candidates: [], decision: null, mode: "" };
     setGenerating(false);
     renderPanel();

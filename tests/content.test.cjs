@@ -1012,19 +1012,69 @@ function postApp({ items = [cacheItem('k1', '帖文一：你会怎么选？四�
     url: 'https://x.com/compose/post',
     response: (message) => {
       if (message.type === 'LIST_POST_CACHE') return { ok: true, items };
+      if (message.type === 'OPTIMIZE_POST') return { ok: true,
+        candidate: { id: 'manual-optimize', text: '我把原来的想法重新整理了一下。', checkNotes: ['发布前核实：具体事实'] },
+        generation: { promptVersion: 'post-policy.v3' } };
       if (message.type === 'GENERATE_POST_BATCH') return batchResponse || { ok: true,
         topics: [{ id: 't3', rank: 1, title: '话题三', summary: '摘要三。', tags: [], repliesCount: 30 }],
         decision: { selectedId: 'c1', reviewRequired: false, confidence: 0.7 },
         cache: items, cacheError: null, evicted: 0, source: 'xzhishu-tweets-hot',
         candidates: items.map((item, i) => ({ id: `c${i + 1}`, topicId: 't3', text: item.text, checkNotes: item.checkNotes })) };
       if (message.type === 'POST_CACHE_OP') {
-        return { ok: true, items: items.map((item) => item.id === message.id && message.op === 'mark'
-          ? { ...item, usedAt: 3000 } : item) };
+        return { ok: true, filledCount: 1, items: items.map((item) => item.id === message.id && message.op === 'mark'
+          ? { ...item, usedAt: 3000 } : item.id === message.id && message.op === 'exclude'
+            ? { ...item, excludedAt: 3000 } : item) };
       }
       return { ok: true };
     }
   });
 }
+
+test('manual post input is optimized in memory and only fills after an explicit click', async () => {
+  const a = postApp();
+  try {
+    assert.equal(a.open('OPEN_QUICK_POST').ok, true, a.status());
+    await new Promise(resolve => setTimeout(resolve, 20));
+    a.panel().querySelector('[data-action="post-mode-optimize"]').click();
+    const input = a.panel().querySelector('#qr-post-draft');
+    Object.getOwnPropertyDescriptor(a.w.HTMLTextAreaElement.prototype, 'value').set.call(input, '我最近试了几个模型，想把实际体验整理一下再发。');
+    input.dispatchEvent(new a.w.Event('input', { bubbles: true }));
+    input.dispatchEvent(new a.w.Event('change', { bubbles: true }));
+    await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(a.panel().querySelector('[data-action="post-optimize"]').disabled, false);
+    a.panel().querySelector('[data-action="post-optimize"]').click();
+    await new Promise(resolve => setTimeout(resolve, 180));
+    assert.ok(a.calls.some((message) => message.type === 'OPTIMIZE_POST'));
+    assert.equal(a.w.document.querySelector('[role="textbox"]').textContent, '');
+    assert.match(a.panel().querySelector('[data-role="optimized-result"]').textContent, /重新整理/);
+    a.panel().querySelector('[data-action="post-optimize-fill"]').click();
+    await new Promise(resolve => setTimeout(resolve, 600));
+    assert.equal(a.w.document.querySelector('[role="textbox"]').textContent, '我把原来的想法重新整理了一下。');
+    assert.equal(a.calls.filter((message) => message.type === 'POST_CACHE_OP').length, 0);
+    assert.match(a.status(), /已填入发帖框草稿/);
+  } finally { a.close(); }
+});
+
+test('manual optimization never overwrites an existing user draft in X', async () => {
+  const a = postApp();
+  try {
+    a.w.document.querySelector('[role="textbox"]').textContent = 'X 中已有的用户草稿';
+    assert.equal(a.open('OPEN_QUICK_POST').ok, true, a.status());
+    await new Promise(resolve => setTimeout(resolve, 20));
+    a.panel().querySelector('[data-action="post-mode-optimize"]').click();
+    const input = a.panel().querySelector('#qr-post-draft');
+    Object.getOwnPropertyDescriptor(a.w.HTMLTextAreaElement.prototype, 'value').set.call(input, '我还有一段想优化的内容。');
+    input.dispatchEvent(new a.w.Event('input', { bubbles: true }));
+    input.dispatchEvent(new a.w.Event('change', { bubbles: true }));
+    await new Promise(resolve => setTimeout(resolve, 20));
+    a.panel().querySelector('[data-action="post-optimize"]').click();
+    await new Promise(resolve => setTimeout(resolve, 180));
+    a.panel().querySelector('[data-action="post-optimize-fill"]').click();
+    await new Promise(resolve => setTimeout(resolve, 80));
+    assert.equal(a.w.document.querySelector('[role="textbox"]').textContent, 'X 中已有的用户草稿');
+    assert.match(a.status(), /已有用户草稿/);
+  } finally { a.close(); }
+});
 
 test('post mode fills one cached candidate into the compose box without sending', async () => {
   const a = postApp();
@@ -1049,22 +1099,22 @@ test('post mode fills one cached candidate into the compose box without sending'
   } finally { a.close(); }
 });
 
-test('switching to another cached candidate swaps the draft and returns the previous one', async () => {
+test('switching to another cached candidate keeps the previous one permanently used', async () => {
   const a = postApp();
   try {
     a.open('OPEN_QUICK_POST');
     await new Promise(resolve => setTimeout(resolve, 20));
     a.panel().querySelectorAll('[data-action="post-fill"]')[0].click();
     await new Promise(resolve => setTimeout(resolve, 600));
-    // k1 is now marked as used, so the remaining fill button belongs to k2.
+    // k1 is now permanently used, so the remaining fill button belongs to k2.
     const remaining = a.panel().querySelectorAll('[data-action="post-fill"]');
     assert.equal(remaining.length, 1);
     remaining[0].click();
     await new Promise(resolve => setTimeout(resolve, 600));
     assert.equal(a.w.document.querySelector('[role="textbox"]').textContent, '帖文二：说说你的边界。');
     const ops = a.calls.filter((message) => message.type === 'POST_CACHE_OP').map((message) => message.op);
-    assert.deepEqual(ops, ['mark', 'unmark', 'mark']);
-    assert.equal(a.calls.filter((message) => message.type === 'POST_CACHE_OP' && message.op === 'unmark')[0].id, 'k1');
+    assert.deepEqual(ops, ['mark', 'mark']);
+    assert.equal(a.calls.filter((message) => message.type === 'POST_CACHE_OP' && message.op === 'unmark').length, 0);
   } finally { a.close(); }
 });
 
@@ -1074,10 +1124,25 @@ test('post batch loads the cache pool and never presents used items as fillable'
     a.open('OPEN_QUICK_POST');
     await new Promise(resolve => setTimeout(resolve, 20));
     assert.equal(a.panel().querySelectorAll('[data-action="post-fill"]').length, 0);
-    assert.match(a.panel().querySelector('[data-role="cache"]').textContent, /已发过/);
+    assert.match(a.panel().querySelector('[data-role="cache"]').textContent, /暂无缓存候选/);
     a.w.document.querySelector('[data-action="post-batch"]').click();
     await new Promise(resolve => setTimeout(resolve, 20));
     assert.ok(a.calls.some((message) => message.type === 'GENERATE_POST_BATCH'));
+  } finally { a.close(); }
+});
+
+test('a previously published cached post can be marked to stop future generation', async () => {
+  const a = postApp();
+  try {
+    a.open('OPEN_QUICK_POST');
+    await new Promise(resolve => setTimeout(resolve, 20));
+    const exclude = a.panel().querySelector('[data-action="post-exclude"]');
+    assert.ok(exclude);
+    exclude.click();
+    await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(a.calls.at(-1).op, 'exclude');
+    assert.equal(a.panel().querySelectorAll('[data-action="post-fill"]').length, 1);
+    assert.match(a.status(), /已标记为已发/);
   } finally { a.close(); }
 });
 

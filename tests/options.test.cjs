@@ -103,6 +103,19 @@ test('the previous built-in post prompt migrates without overwriting custom prom
   const a=await app({postPrompt:legacy});
   try{assert.match(a.field('postPrompt').value,/用户平时发帖|直接问一个具体问题/);assert.doesNotMatch(a.field('postPrompt').value,/低门槛选项/);}finally{a.close();}
 });
+
+test('the immediately previous built-in post prompt also migrates to source rewriting',async()=>{
+  const previous=`面向 X 发帖，先像用户平时发帖，再考虑互动。
+优先采用“直接问一个具体问题 → 补充自己的判断或观察 → 再自然追问一句”的节奏；不要求每条都完整走完，也可以写成连续几段记录式陈述。
+使用 2–6 个短句行，通常分成 2–4 个自然段；只在自然停顿处换行，不为了凑格式硬拆句。
+可以保留口语化标点（例如“？？？”）和中英文产品名混用，但不能机械添加；不要为了互动硬加“评论区聊聊”“报数”“站队”等话术。
+只使用选定话题的标题与摘要事实；不捏造个人经历、数据或他人言行。
+时效性事实留有余地并列入核实提示，不写进帖文正文。
+不用营销腔、标签堆砌、AI 式过渡或完整漂亮的总结收尾；没有自然笑点就不写笑点。
+以上中文只描述风格；实际帖文跟随话题标题的主要语言。`;
+  const a=await app({postPrompt:previous});
+  try{assert.match(a.field('postPrompt').value,/sourceMaterials|改写/);}finally{a.close();}
+});
 test('post categories are selectable and saved with the post settings',async()=>{
   const a=await app();
   try{
